@@ -43,15 +43,18 @@ export function useOnlineStatus() {
 
 const TABLES_TO_SYNC = [
   { name: 'crops', dbTable: db.crops },
-  { name: 'seedBatches', dbTable: db.seedBatches },
-  { name: 'inputInventory', dbTable: db.inputInventory },
-  { name: 'plantingLogs', dbTable: db.plantingLogs },
-  { name: 'cultivationLogs', dbTable: db.cultivationLogs },
-  { name: 'harvestLogs', dbTable: db.harvestLogs },
+  { name: 'seed_batches', dbTable: db.seedBatches },
+  { name: 'input_inventory', dbTable: db.inputInventory },
+  { name: 'planting_logs', dbTable: db.plantingLogs },
+  { name: 'cultivation_logs', dbTable: db.cultivationLogs },
+  { name: 'harvest_logs', dbTable: db.harvestLogs },
   { name: 'customers', dbTable: db.customers },
   { name: 'sales', dbTable: db.sales },
-  { name: 'saleItems', dbTable: db.saleItems },
+  { name: 'sale_items', dbTable: db.saleItems },
   { name: 'invoices', dbTable: db.invoices },
+  { name: 'trees', dbTable: db.trees }, // Added trees table
+  { name: 'reminders', dbTable: db.reminders },
+  { name: 'seedling_production_logs', dbTable: db.seedlingProductionLogs } // Explicitly use snake_case
 ] as const; // Use 'as const' for stricter typing of table names
 
 type TableName = typeof TABLES_TO_SYNC[number]['name'];
@@ -106,8 +109,42 @@ async function pushChangesToSupabase() {
         } else {
           // Handle upsert for non-deleted items
           // eslint-disable-next-line @typescript-eslint/no-unused-vars
-          const { _synced, _last_modified, is_deleted, deleted_at, ...supabaseData } = currentItem;
-          const { error: upsertError } = await supabase.from(name).upsert(supabaseData, { onConflict: 'id' });
+          let { _synced, _last_modified, is_deleted, deleted_at, ...itemToPushAny } = currentItem;
+          // Cast to a more specific type for manipulation, but ensure it's flexible enough
+          let itemToPush: Record<string, any> = { ...itemToPushAny };
+
+          // Data cleaning specific to tables before pushing
+          if (name === 'input_inventory') {
+            if ('cost_per_unit' in itemToPush) {
+              delete itemToPush.cost_per_unit;
+            }
+          }
+          
+          if (name === 'sale_items') {
+            const saleItemToPush = itemToPush as Partial<SaleItem>;
+            if ((saleItemToPush.discount_type as any) === '') {
+              saleItemToPush.discount_type = null;
+            }
+            if (saleItemToPush.discount_type === null || saleItemToPush.discount_type === undefined) {
+              saleItemToPush.discount_value = null;
+            }
+          }
+
+          // If syncing the 'sales' table, remove any nested 'items' array before pushing.
+          // Nested items are synced separately to the 'sale_items' table.
+          if (name === 'sales' && 'items' in itemToPush) {
+            console.log(`Removing nested 'items' array from sale object ${itemToPush.id} before pushing to Supabase.`);
+            delete itemToPush.items;
+          }
+
+          if (name === 'seedling_production_logs') {
+            // Remove enriched fields not present in the actual Supabase table
+            delete itemToPush.cropName;
+            delete itemToPush.cropVariety;
+            delete itemToPush.seedBatchCode;
+          }
+
+          const { error: upsertError } = await supabase.from(name).upsert(itemToPush, { onConflict: 'id' });
           
           if (upsertError) {
             throw upsertError;
@@ -119,14 +156,26 @@ async function pushChangesToSupabase() {
           console.log(`Successfully synced (upserted) item ${currentItem.id} from ${name}`);
         }
       } catch (error: any) {
-        console.error(`Failed to sync item ${item.id} from ${name}:`, error);
-        errors.push({ table: name, id: item.id, error: error.message });
+        console.error(`Failed to sync item ${item.id} from ${name}. Raw Supabase error:`, error);
+        let detailedError = 'Unknown error during upsert.';
+        if (error && typeof error === 'object') {
+            detailedError = `Message: ${error.message || 'N/A'}`;
+            if ('details' in error) detailedError += ` | Details: ${error.details}`;
+            if ('hint' in error) detailedError += ` | Hint: ${error.hint}`;
+            if ('code' in error) detailedError += ` | Code: ${error.code}`;
+        } else if (typeof error === 'string') {
+            detailedError = error;
+        }
+        errors.push({ table: name, id: item.id, error: detailedError });
       }
     }
   }
 
   if (changesPushed > 0) console.log(`Successfully pushed ${changesPushed} changes to Supabase.`);
-  if (errors.length > 0) console.error("Errors occurred during sync:", errors);
+  if (errors.length > 0) {
+      console.error("Detailed errors occurred during sync push:");
+      errors.forEach(err => console.error(`- Table: ${err.table}, ID: ${err.id}, Error: ${err.error}`));
+  }
   return { changesPushed, errors };
 }
 
@@ -209,8 +258,18 @@ async function fetchChangesFromSupabase() {
         }
       }
     } catch (error: any) {
-      console.error(`Failed to fetch changes for table ${name}:`, error);
-      errors.push({ table: name, error: error.message });
+      console.error(`Failed to fetch changes for table ${name}. Raw error:`, error);
+      let errorMessage = "Unknown error";
+      if (error && typeof error === 'object') {
+        if ('message' in error) errorMessage = error.message;
+        if ('details' in error) errorMessage += ` | Details: ${error.details}`;
+        if ('hint' in error) errorMessage += ` | Hint: ${error.hint}`;
+        if ('code'in error) errorMessage += ` | Code: ${error.code}`;
+      } else if (typeof error === 'string') {
+        errorMessage = error;
+      }
+      console.error(`Formatted error for ${name}: ${errorMessage}`);
+      errors.push({ table: name, error: errorMessage });
     }
   }
   if (changesFetched > 0) console.log(`Successfully fetched and applied ${changesFetched} changes from Supabase.`);

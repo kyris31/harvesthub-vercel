@@ -1,81 +1,83 @@
-'use client'; // This will be a client component to interact with local DB and state
+'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect } from 'react'; // Removed useCallback as fetchData is now inline
+import { useLiveQuery } from 'dexie-react-hooks';
 import { db, Crop } from '@/lib/db';
 import CropList from '@/components/CropList';
 import CropForm from '@/components/CropForm';
+import { PlusCircleIcon } from '@heroicons/react/24/outline';
 
-export default function CropsPage() {
-  const [crops, setCrops] = useState<Crop[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+// syncCounter prop is no longer needed with useLiveQuery
+// interface CropsPageProps {
+//   syncCounter?: number;
+// }
+
+export default function CropsPage(/*{ syncCounter }: CropsPageProps*/) {
   const [showForm, setShowForm] = useState(false);
   const [editingCrop, setEditingCrop] = useState<Crop | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [isDeleting, setIsDeleting] = useState<string | null>(null); // Store ID of crop being deleted
+  const [isDeleting, setIsDeleting] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null); // For form submission errors primarily
 
-  // Removed the initial useEffect for fetchCrops as fetchCropsAndUpdateState covers it.
+  // Use useLiveQuery to reactively get crops
+  const crops = useLiveQuery(
+    async () => {
+      try {
+        // console.log("CropsPage: useLiveQuery fetching crops..."); // DEBUG
+        const cropsData = await db.crops.orderBy('name').filter(c => c.is_deleted !== 1).toArray();
+        // console.log('CropsPage: useLiveQuery fetched cropsData:', JSON.stringify(cropsData.slice(0, 2), null, 2)); // DEBUG
+        setError(null); // Clear previous fetch errors if successful
+        return cropsData;
+      } catch (err) {
+        console.error("Failed to fetch crops with useLiveQuery:", err);
+        setError("Failed to load crops. Please try again.");
+        return []; // Return empty array on error
+      }
+    },
+    [] // Dependencies for the query itself, not for re-triggering. Re-runs when Dexie data changes.
+  );
 
-  const fetchCropsAndUpdateState = async () => {
-    setIsLoading(true);
-    try {
-      // Filter out soft-deleted items at the source
-      const allCrops = await db.crops
-        .where('is_deleted').equals(0) // Corrected to .equals(0) for active items
-        .orderBy('_last_modified')
-        .reverse()
-        .toArray();
-      setCrops(allCrops);
-      setError(null);
-    } catch (err) {
-      console.error("Failed to fetch crops:", err);
-      setError("Failed to load crops. Please try again.");
-    } finally {
-      setIsLoading(false);
-    }
-  };
+  // isLoading can be inferred from crops being undefined initially
+  const isLoading = crops === undefined;
 
-  useEffect(() => {
-    fetchCropsAndUpdateState();
-  }, []);
+  // This useEffect is no longer needed as useLiveQuery handles data fetching and updates.
+  // useEffect(() => {
+  //   console.log("CropsPage: fetchData triggered by syncCounter or initial load.", syncCounter);
+  //   fetchData();
+  // }, [fetchData, syncCounter]);
 
-
-  const handleFormSubmit = async (data: Omit<Crop, 'id' | '_synced' | '_last_modified' | 'created_at' | 'updated_at'> | Crop) => {
+  const handleFormSubmit = async (cropData: Omit<Crop, 'id' | '_synced' | '_last_modified' | 'created_at' | 'updated_at' | 'is_deleted' | 'deleted_at'>) => {
     setIsSubmitting(true);
     setError(null);
+    const now = new Date().toISOString();
+
     try {
-      if ('id' in data && data.id) { // Editing existing crop
+      if (editingCrop) {
         const updatedCrop: Partial<Crop> = {
-          name: data.name,
-          type: data.type,
-          updated_at: new Date().toISOString(),
-          _synced: 0, // Mark as unsynced
+          ...cropData,
+          updated_at: now,
+          _synced: 0,
           _last_modified: Date.now(),
         };
-        await db.crops.update(data.id, updatedCrop);
-      } else { // Adding new crop
-        const now = new Date().toISOString();
-        const newCropData: Omit<Crop, 'id'> = {
-          name: data.name,
-          type: data.type,
+        await db.crops.update(editingCrop.id, updatedCrop);
+      } else {
+        const newCrop: Crop = {
+          id: crypto.randomUUID(),
+          ...cropData,
           created_at: now,
           updated_at: now,
-          _synced: 0, // Mark as unsynced
+          _synced: 0,
           _last_modified: Date.now(),
-          is_deleted: 0, // Default to not deleted
-          deleted_at: undefined, // Ensure it's not set
+          is_deleted: 0,
         };
-        // Dexie's add method doesn't need the full Crop object from db.addCropAndMark if we handle ID generation here
-        // Since we use UUIDs, we should generate it before adding.
-        const id = crypto.randomUUID();
-        await db.crops.add({ ...newCropData, id });
+        await db.crops.add(newCrop);
       }
-      await fetchCropsAndUpdateState(); // Re-fetch all crops to update list
+      // await fetchData(); // No longer need to manually call fetchData, useLiveQuery handles updates
       setShowForm(false);
       setEditingCrop(null);
-    } catch (err) {
+    } catch (err: any) {
       console.error("Failed to save crop:", err);
-      setError("Failed to save crop. Please ensure the name is unique if applicable and try again.");
+      setError(err.message || "Failed to save crop. Please try again.");
     } finally {
       setIsSubmitting(false);
     }
@@ -88,13 +90,12 @@ export default function CropsPage() {
   };
 
   const handleDelete = async (id: string) => {
-    if (window.confirm("Are you sure you want to delete this crop? This action cannot be undone locally immediately.")) {
+    if (window.confirm("Are you sure you want to delete this crop? This might affect related records if not handled by database constraints (e.g., seed batches).")) {
       setIsDeleting(id);
       setError(null);
       try {
-        // Perform soft delete
         await db.markForSync(db.crops, id, true);
-        await fetchCropsAndUpdateState(); // Re-fetch to update the list (excluding soft-deleted)
+        // await fetchData(); // No longer need to manually call fetchData
       } catch (err) {
         console.error("Failed to delete crop:", err);
         setError("Failed to delete crop.");
@@ -104,65 +105,57 @@ export default function CropsPage() {
     }
   };
 
-
-  if (isLoading) {
-    return <p>Loading crops...</p>;
-  }
-
-  if (error) {
-    return <p className="text-red-500">{error}</p>;
-  }
-
   return (
     <div>
       <header className="bg-white shadow mb-6">
-        <div className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8 flex justify-between items-center">
-          <h1 className="text-3xl font-bold tracking-tight text-gray-900">Crop Management</h1>
-          <button
-            onClick={() => { setEditingCrop(null); setShowForm(true); setError(null); }}
-            className="bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-4 rounded shadow-sm transition-colors duration-150"
-          >
-            Add New Crop
-          </button>
+        <div className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
+          <div className="flex flex-wrap justify-between items-center gap-4">
+            <h1 className="text-3xl font-bold tracking-tight text-gray-900">Manage Crops</h1>
+            <button
+              onClick={() => { setEditingCrop(null); setShowForm(true); setError(null); }}
+              className="bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-4 rounded shadow-sm transition-colors duration-150 text-sm flex items-center"
+            >
+              <PlusCircleIcon className="h-5 w-5 mr-2" />
+              Add New Crop
+            </button>
+          </div>
         </div>
       </header>
 
       {showForm && (
         <CropForm
-          initialData={editingCrop}
+          initialData={editingCrop || undefined}
           onSubmit={handleFormSubmit}
           onCancel={() => { setShowForm(false); setEditingCrop(null); setError(null);}}
           isSubmitting={isSubmitting}
         />
       )}
 
-      <div className="mt-4">
+      <div className="mx-auto max-w-7xl py-0 sm:px-6 lg:px-8"> {/* Adjusted padding */}
+        {error && <p className="text-red-500 mb-4 p-3 bg-red-100 rounded-md">{error}</p>}
         {isLoading && <p className="text-center text-gray-500">Loading crops...</p>}
-        {!isLoading && !error && (
+        {!isLoading && !error && crops && (
           <CropList
-            crops={crops}
+            crops={crops} // crops is now directly from useLiveQuery
             onEdit={handleEdit}
             onDelete={handleDelete}
             isDeleting={isDeleting}
           />
         )}
-        {!isLoading && crops.length === 0 && !error && (
+        {!isLoading && crops && crops.length === 0 && !error && (
            <div className="text-center py-10">
-            <svg className="mx-auto h-12 w-12 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
-              <path vectorEffect="non-scaling-stroke" strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 13h6m-3-3v6m-9 1V7a2 2 0 012-2h6l2 2h6a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z" />
+            <svg className="mx-auto h-12 w-12 text-gray-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 15.75V18m-7.5-6.75h.008v.008H8.25v-.008zm0 2.25h.008v.008H8.25v-.008zm0 2.25h.008v.008H8.25v-.008zm0 2.25h.008v.008H8.25v-.008zm.375-6.75h.008v.008H8.625v-.008zm0 2.25h.008v.008H8.625v-.008zm0 2.25h.008v.008H8.625v-.008zm0 2.25h.008v.008H8.625v-.008zm.375-6.75h.008v.008H9v-.008zm0 2.25h.008v.008H9v-.008zm0 2.25h.008v.008H9v-.008zm.375-6.75h.008v.008h-.008v-.008zm0 2.25h.008v.008h-.008v-.008zm0 2.25h.008v.008h-.008v-.008zm0 2.25h.008v.008h-.008v-.008zm.375-6.75h.008v.008H9.75v-.008zm0 2.25h.008v.008H9.75v-.008zm0 2.25h.008v.008H9.75v-.008zm0 2.25h.008v.008H9.75v-.008zm.375-6.75h.008v.008H10.125v-.008zm0 2.25h.008v.008H10.125v-.008zm0 2.25h.008v.008H10.125v-.008zm0 2.25h.008v.008H10.125v-.008zm.375-6.75h.008v.008H10.5v-.008zm0 2.25h.008v.008H10.5v-.008zm0 2.25h.008v.008H10.5v-.008zm.375-6.75h.008v.008h-.008v-.008zm0 2.25h.008v.008h-.008v-.008zm0 2.25h.008v.008h-.008v-.008zm0 2.25h.008v.008h-.008v-.008zm.375-6.75h.008v.008H11.25v-.008zm0 2.25h.008v.008H11.25v-.008zm0 2.25h.008v.008H11.25v-.008zm0 2.25h.008v.008H11.25v-.008zm.375-6.75h.008v.008H11.625v-.008zm0 2.25h.008v.008H11.625v-.008zm0 2.25h.008v.008H11.625v-.008zm0 2.25h.008v.008H11.625v-.008zm.375-6.75h.008v.008H12v-.008zm0 2.25h.008v.008H12v-.008zm0 2.25h.008v.008H12v-.008zm.375-6.75h.008v.008h-.008v-.008zm0 2.25h.008v.008h-.008v-.008zm0 2.25h.008v.008h-.008v-.008zm0 2.25h.008v.008h-.008v-.008zm.375-6.75h.008v.008H12.75v-.008zm0 2.25h.008v.008H12.75v-.008zm0 2.25h.008v.008H12.75v-.008zm0 2.25h.008v.008H12.75v-.008zm.375-6.75h.008v.008H13.125v-.008zm0 2.25h.008v.008H13.125v-.008zm0 2.25h.008v.008H13.125v-.008zm0 2.25h.008v.008H13.125v-.008zm.375-6.75h.008v.008H13.5v-.008zm0 2.25h.008v.008H13.5v-.008zm0 2.25h.008v.008H13.5v-.008zm.375-6.75h.008v.008h-.008v-.008zm0 2.25h.008v.008h-.008v-.008zm0 2.25h.008v.008h-.008v-.008zm0 2.25h.008v.008h-.008v-.008zm.375-6.75h.008v.008H14.25v-.008zm0 2.25h.008v.008H14.25v-.008zm0 2.25h.008v.008H14.25v-.008zm0 2.25h.008v.008H14.25v-.008zm.375-6.75h.008v.008H14.625v-.008zm0 2.25h.008v.008H14.625v-.008zm0 2.25h.008v.008H14.625v-.008zm0 2.25h.008v.008H14.625v-.008zm.375-6.75h.008v.008H15v-.008zm0 2.25h.008v.008H15v-.008zm0 2.25h.008v.008H15v-.008zm.375-6.75h.008v.008h-.008v-.008zm0 2.25h.008v.008h-.008v-.008zm0 2.25h.008v.008h-.008v-.008zm0 2.25h.008v.008h-.008v-.008zm.375-6.75h.008v.008H15.75v-.008zm0 2.25h.008v.008H15.75v-.008zm0 2.25h.008v.008H15.75v-.008zm0 2.25h.008v.008H15.75v-.008zM6 12.75a.75.75 0 11-1.5 0 .75.75 0 011.5 0zM10.5 12.75a.75.75 0 11-1.5 0 .75.75 0 011.5 0zM15 12.75a.75.75 0 11-1.5 0 .75.75 0 011.5 0z" />
             </svg>
-            <h3 className="mt-2 text-sm font-medium text-gray-900">No crops</h3>
-            <p className="mt-1 text-sm text-gray-500">Get started by adding a new crop.</p>
+            <h3 className="mt-2 text-sm font-medium text-gray-900">No crops found</h3>
+            <p className="mt-1 text-sm text-gray-500">Get started by adding your first crop.</p>
             <div className="mt-6">
               <button
                 type="button"
                 onClick={() => { setEditingCrop(null); setShowForm(true); setError(null); }}
                 className="inline-flex items-center px-4 py-2 border border-transparent shadow-sm text-sm font-medium rounded-md text-white bg-green-600 hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500"
               >
-                {/* PlusIcon */}
-                <svg className="-ml-1 mr-2 h-5 w-5" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
-                  <path fillRule="evenodd" d="M10 3a1 1 0 011 1v5h5a1 1 0 110 2h-5v5a1 1 0 11-2 0v-5H4a1 1 0 110-2h5V4a1 1 0 011-1z" clipRule="evenodd" />
-                </svg>
+                <PlusCircleIcon className="h-5 w-5 mr-2" />
                 Add New Crop
               </button>
             </div>

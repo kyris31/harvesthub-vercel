@@ -1,7 +1,8 @@
 'use client';
 
 import React from 'react';
-import { Sale, SaleItem, Customer, HarvestLog, Crop, SeedBatch, PlantingLog } from '@/lib/db'; // Added PlantingLog
+import { Sale, SaleItem, Customer, HarvestLog, Crop, SeedBatch, PlantingLog } from '@/lib/db';
+import { downloadInvoicePDF } from '@/lib/invoiceGenerator'; // Import the PDF download function
 
 interface EnrichedSale extends Sale {
   customerName?: string;
@@ -43,12 +44,38 @@ export default function SaleList({
     return customer ? customer.name : 'Unknown/Deleted Customer';
   };
 
-  // Calculate total for a sale if not already provided
-  const calculateSaleTotal = (saleId: string): number => {
-    const activeSaleItems = saleItems.filter(item => item.is_deleted !== 1);
-    return activeSaleItems
-      .filter(item => item.sale_id === saleId)
-      .reduce((sum, item) => sum + (Number(item.quantity_sold) * Number(item.price_per_unit)), 0);
+  // Calculate total for a sale, considering discounts
+  const calculateSaleTotalWithDiscount = (saleId: string): number => {
+    const itemsForThisSale = saleItems.filter(item => item.sale_id === saleId && item.is_deleted !== 1);
+    let overallTotal = 0;
+    itemsForThisSale.forEach(item => {
+      const quantity = Number(item.quantity_sold);
+      const price = Number(item.price_per_unit);
+      let itemTotal = 0;
+      if (!isNaN(quantity) && !isNaN(price)) {
+        itemTotal = quantity * price;
+        if (item.discount_type && (item.discount_value !== null && item.discount_value !== undefined)) {
+          const discountValue = Number(item.discount_value);
+          if (item.discount_type === 'Amount') {
+            itemTotal -= discountValue;
+          } else if (item.discount_type === 'Percentage') {
+            itemTotal -= itemTotal * (discountValue / 100);
+          }
+        }
+      }
+      overallTotal += Math.max(0, itemTotal); // Ensure item total doesn't go below zero
+    });
+    return overallTotal;
+  };
+
+  const handleDownloadPdf = async (saleId: string) => {
+    try {
+      await downloadInvoicePDF(saleId);
+    } catch (error) {
+      console.error("Error downloading PDF from list:", error);
+      // Consider a more user-friendly error display, e.g., a toast notification
+      alert("Failed to download PDF invoice. Check console for details.");
+    }
   };
 
   const activeSales = sales.filter(sale => sale.is_deleted !== 1);
@@ -74,14 +101,15 @@ export default function SaleList({
           {activeSales.map((sale) => {
             const activeSaleItemsForThisSale = saleItems.filter(si => si.sale_id === sale.id && si.is_deleted !== 1);
             const itemCount = activeSaleItemsForThisSale.length;
-            const totalAmount = sale.total_amount ?? calculateSaleTotal(sale.id); // calculateSaleTotal already filters for active items
-
+            // Use the new function to calculate total with discount
+            const totalAmount = sale.total_amount ?? calculateSaleTotalWithDiscount(sale.id);
+        
             return (
               <tr key={sale.id} className="border-b border-gray-200 hover:bg-green-50 transition-colors duration-150">
                 <td className="py-3 px-5">{new Date(sale.sale_date).toLocaleDateString()}</td>
                 <td className="py-3 px-5">{getCustomerName(sale.customer_id)}</td>
                 <td className="py-3 px-5 text-right">{itemCount}</td>
-                <td className="py-3 px-5 text-right">${totalAmount.toFixed(2)}</td>
+                <td className="py-3 px-5 text-right">€{totalAmount.toFixed(2)}</td>
                 <td className="py-3 px-5 text-center">
                   {sale._synced === 0 ? (
                     <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800">
@@ -97,27 +125,35 @@ export default function SaleList({
                     </span>
                   )}
                 </td>
-                <td className="py-3 px-5 text-center space-x-2">
+                <td className="py-3 px-5 text-center space-x-1"> {/* Adjusted spacing for more buttons */}
                   <button
-                    onClick={() => onViewInvoice(sale.id)}
-                    className="text-purple-600 hover:text-purple-800 font-medium transition-colors duration-150"
-                    title="View/Generate Invoice"
+                    onClick={() => onViewInvoice(sale.id)} // This can still open a modal/page for invoice details if needed
+                    className="text-indigo-600 hover:text-indigo-800 font-medium transition-colors duration-150 px-2 py-1 text-xs rounded-md"
+                    title="View Invoice Details"
                   >
-                    Invoice
+                    Details
                   </button>
                   <button
-                    onClick={() => onEdit(sale)} // Pass the original sale object
-                    className="text-blue-600 hover:text-blue-800 font-medium transition-colors duration-150"
+                    onClick={() => handleDownloadPdf(sale.id)}
+                    className="text-green-600 hover:text-green-800 font-medium transition-colors duration-150 px-2 py-1 text-xs rounded-md"
+                    title="Download PDF Invoice"
+                    disabled={isDeleting === sale.id}
+                  >
+                    PDF
+                  </button>
+                  <button
+                    onClick={() => onEdit(sale)}
+                    className="text-blue-600 hover:text-blue-800 font-medium transition-colors duration-150 px-2 py-1 text-xs rounded-md"
                     disabled={isDeleting === sale.id}
                   >
                     Edit
                   </button>
                   <button
                     onClick={() => onDelete(sale.id)}
-                    className="text-red-600 hover:text-red-800 font-medium transition-colors duration-150 disabled:opacity-50"
+                    className="text-red-600 hover:text-red-800 font-medium transition-colors duration-150 px-2 py-1 text-xs rounded-md disabled:opacity-50"
                     disabled={isDeleting === sale.id}
                   >
-                    {isDeleting === sale.id ? 'Deleting...' : 'Delete'}
+                    {isDeleting === sale.id ? '...' : 'Del'}
                   </button>
                 </td>
               </tr>

@@ -4,7 +4,8 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { db, Sale, SaleItem, Customer, HarvestLog, PlantingLog, SeedBatch, Crop, Invoice } from '@/lib/db';
 import SaleList from '@/components/SaleList';
 import SaleForm from '@/components/SaleForm';
-// import { generateInvoicePDF } from '@/lib/invoiceGenerator'; // Placeholder for PDF generation
+import { downloadInvoicePDF } from '@/lib/invoiceGenerator';
+import { exportSalesToCSV, exportSalesToPDF } from '@/lib/reportUtils'; // Import CSV and PDF export functions
 
 export default function SalesPage() {
   const [sales, setSales] = useState<Sale[]>([]);
@@ -34,13 +35,13 @@ export default function SalesPage() {
         seedBatchesData,
         cropsData
       ] = await Promise.all([
-        db.sales.where('is_deleted').equals(0).orderBy('sale_date').reverse().toArray(),
-        db.saleItems.where('is_deleted').equals(0).toArray(),
-        db.customers.where('is_deleted').equals(0).orderBy('name').toArray(), // Added orderBy for consistency
-        db.harvestLogs.where('is_deleted').equals(0).orderBy('harvest_date').reverse().toArray(),
-        db.plantingLogs.where('is_deleted').equals(0).orderBy('planting_date').reverse().toArray(),
-        db.seedBatches.where('is_deleted').equals(0).orderBy('_last_modified').reverse().toArray(),
-        db.crops.where('is_deleted').equals(0).orderBy('name').toArray(), // Added orderBy for consistency
+        db.sales.orderBy('sale_date').filter(s => s.is_deleted === 0).reverse().toArray(),
+        db.saleItems.where('is_deleted').equals(0).toArray(), // No specific order needed for all items, will be filtered per sale
+        db.customers.orderBy('name').filter(c => c.is_deleted === 0).toArray(),
+        db.harvestLogs.orderBy('harvest_date').filter(h => h.is_deleted === 0).reverse().toArray(),
+        db.plantingLogs.orderBy('planting_date').filter(p => p.is_deleted === 0).reverse().toArray(),
+        db.seedBatches.orderBy('_last_modified').filter(sb => sb.is_deleted === 0).reverse().toArray(),
+        db.crops.orderBy('name').filter(c => c.is_deleted === 0).toArray(),
       ]);
       setSales(salesData);
       setSaleItems(saleItemsData);
@@ -71,13 +72,29 @@ export default function SalesPage() {
     const saleId = editingSale?.id || crypto.randomUUID();
     const now = new Date().toISOString();
 
+    // Calculate total amount with discounts
+    let calculatedTotalAmount = 0;
+    for (const item of itemsData) {
+        const quantity = Number(item.quantity_sold);
+        const price = Number(item.price_per_unit);
+        let itemTotal = 0;
+        if (!isNaN(quantity) && !isNaN(price)) {
+            itemTotal = quantity * price;
+            if (item.discount_type && (item.discount_value !== null && item.discount_value !== undefined)) {
+                const discountValue = Number(item.discount_value);
+                if (item.discount_type === 'Amount') {
+                    itemTotal -= discountValue;
+                } else if (item.discount_type === 'Percentage') {
+                    itemTotal -= itemTotal * (discountValue / 100);
+                }
+            }
+        }
+        calculatedTotalAmount += Math.max(0, itemTotal);
+    }
+
     try {
       await db.transaction('rw', db.sales, db.saleItems, db.invoices, async () => {
-        if (editingSale) { // Editing existing sale
-          // For editing, we soft-delete old items and invoice, then create new ones.
-          // This simplifies logic compared to trying to update/diff items.
-          // The PRD states invoices are immutable, so generating a new one on edit is consistent.
-          // The 'if (editingSale)' on line 80 was redundant and caused the syntax error.
+        if (editingSale) {
           const itemsToSoftDelete = await db.saleItems.where('sale_id').equals(editingSale.id).toArray();
           for (const item of itemsToSoftDelete) {
             await db.markForSync(db.saleItems, item.id, true);
@@ -86,20 +103,23 @@ export default function SalesPage() {
           if (invoiceToSoftDelete) {
             await db.markForSync(db.invoices, invoiceToSoftDelete.id, true);
           }
-          // Update the sale record itself
-          const updatedSale: Partial<Sale> = {
-            ...saleData, // contains new sale_date, customer_id, notes
+          
+          const updatedSaleData: Sale = {
+            ...(editingSale as Sale), // Cast to ensure all Sale properties are there if editingSale is partial
+            ...saleData,
+            total_amount: calculatedTotalAmount, // Update with new discounted total
             updated_at: now,
             _synced: 0,
             _last_modified: Date.now(),
-            is_deleted: 0, // Ensure it's not marked deleted if it was an edit
+            is_deleted: 0,
             deleted_at: undefined,
           };
-          await db.sales.update(editingSale.id, updatedSale);
-        } else { // Adding new sale
+          await db.sales.update(editingSale.id, updatedSaleData);
+        } else {
             const newSale: Sale = {
               id: saleId,
               ...saleData,
+              total_amount: calculatedTotalAmount, // Set new discounted total
               created_at: now,
               updated_at: now,
               _synced: 0,
@@ -110,7 +130,6 @@ export default function SalesPage() {
             await db.sales.add(newSale);
           }
 
-          // Add new sale items (for both add and edit scenarios, as old items are soft-deleted on edit)
           for (const item of itemsData) {
             const newItemId = crypto.randomUUID();
             await db.saleItems.add({
@@ -143,9 +162,17 @@ export default function SalesPage() {
               deleted_at: undefined,
           };
           await db.invoices.add(newInvoice);
-        console.log(`Invoice ${invoiceNumber} generated for sale ${saleId}`);
-
+        console.log(`Invoice ${invoiceNumber} created locally for sale ${saleId}`);
+        
       }); // End transaction
+      
+      // Trigger PDF download after successful transaction
+      // This happens outside the Dexie transaction
+      downloadInvoicePDF(saleId).catch(pdfError => {
+        console.error("Error auto-downloading invoice after sale:", pdfError);
+        // Optionally set a non-blocking UI notification about PDF download failure
+        // setError("Sale saved, but failed to auto-download invoice. You can download it manually from the list.");
+      });
 
       await fetchData();
       setShowForm(false);
@@ -197,14 +224,12 @@ export default function SalesPage() {
   };
   
   const handleViewInvoice = async (saleId: string) => {
-    // In a real app, this would fetch the PDF URL or generate/display the PDF.
-    // For now, it's a placeholder.
-    const invoice = await db.invoices.where('sale_id').equals(saleId).first();
-    if (invoice) {
-        alert(`Invoice: ${invoice.invoice_number}\nPDF URL (placeholder): ${invoice.pdf_url}\n\nPDF generation and display would happen here.`);
-        // Example: window.open(invoice.pdf_url, '_blank');
-    } else {
-        alert("Invoice not found for this sale.");
+    // Call the downloadInvoicePDF function from invoiceGenerator.ts
+    try {
+        await downloadInvoicePDF(saleId);
+    } catch (error) {
+        console.error("Failed to download invoice:", error);
+        alert("Failed to generate or download invoice. See console for details.");
     }
   };
 
@@ -212,14 +237,30 @@ export default function SalesPage() {
   return (
     <div>
       <header className="bg-white shadow mb-6">
-        <div className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8 flex justify-between items-center">
-          <h1 className="text-3xl font-bold tracking-tight text-gray-900">Sales Records</h1>
-          <button
-            onClick={() => { setEditingSale(null); setShowForm(true); setError(null); }}
-            className="bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-4 rounded shadow-sm transition-colors duration-150"
-          >
-            Record New Sale
-          </button>
+        <div className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
+          <div className="flex flex-wrap justify-between items-center gap-4">
+            <h1 className="text-3xl font-bold tracking-tight text-gray-900">Sales Records</h1>
+            <div className="flex space-x-3">
+              <button
+                onClick={exportSalesToCSV}
+                className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded shadow-sm transition-colors duration-150 text-sm"
+              >
+                Export Sales (CSV)
+              </button>
+              <button
+                onClick={exportSalesToPDF}
+                className="bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-4 rounded shadow-sm transition-colors duration-150 text-sm"
+              >
+                Export Sales (PDF)
+              </button>
+              <button
+                onClick={() => { setEditingSale(null); setShowForm(true); setError(null); }}
+                className="bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-4 rounded shadow-sm transition-colors duration-150 text-sm"
+              >
+                Record New Sale
+              </button>
+            </div>
+          </div>
         </div>
       </header>
 

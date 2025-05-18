@@ -15,10 +15,10 @@ export default function InputInventoryForm({ initialData, onSubmit, onCancel, is
   const [type, setType] = useState('');
   const [supplier, setSupplier] = useState('');
   const [purchaseDate, setPurchaseDate] = useState('');
-  const [initialQuantity, setInitialQuantity] = useState<number | ''>('');
-  const [currentQuantity, setCurrentQuantity] = useState<number | ''>('');
+  const [quantityPurchased, setQuantityPurchased] = useState<number | ''>(''); // Renamed from initialQuantity for clarity in form
+  const [currentQuantityDisplay, setCurrentQuantityDisplay] = useState<number | ''>(''); // For read-only display
   const [quantityUnit, setQuantityUnit] = useState('');
-  const [costPerUnit, setCostPerUnit] = useState<number | ''>('');
+  const [totalPurchaseCost, setTotalPurchaseCost] = useState<number | ''>(''); // Renamed from costPerUnit
   const [notes, setNotes] = useState('');
   const [formError, setFormError] = useState<string | null>(null);
 
@@ -28,10 +28,10 @@ export default function InputInventoryForm({ initialData, onSubmit, onCancel, is
       setType(initialData.type || '');
       setSupplier(initialData.supplier || '');
       setPurchaseDate(initialData.purchase_date ? initialData.purchase_date.split('T')[0] : '');
-      setInitialQuantity(initialData.initial_quantity ?? '');
-      setCurrentQuantity(initialData.current_quantity ?? '');
+      setQuantityPurchased(initialData.initial_quantity ?? ''); // Use initial_quantity for this field
+      setCurrentQuantityDisplay(initialData.current_quantity ?? ''); // For display
       setQuantityUnit(initialData.quantity_unit || '');
-      setCostPerUnit(initialData.cost_per_unit ?? '');
+      setTotalPurchaseCost(initialData.total_purchase_cost ?? ''); // Use new field name
       setNotes(initialData.notes || '');
     } else {
       // Reset form
@@ -39,10 +39,10 @@ export default function InputInventoryForm({ initialData, onSubmit, onCancel, is
       setType('');
       setSupplier('');
       setPurchaseDate('');
-      setInitialQuantity('');
-      setCurrentQuantity('');
+      setQuantityPurchased('');
+      setCurrentQuantityDisplay('');
       setQuantityUnit('');
-      setCostPerUnit('');
+      setTotalPurchaseCost('');
       setNotes('');
     }
   }, [initialData]);
@@ -50,48 +50,60 @@ export default function InputInventoryForm({ initialData, onSubmit, onCancel, is
   const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     setFormError(null);
-    if (!name.trim() || initialQuantity === '' || currentQuantity === '') {
-      setFormError('Item Name, Initial Quantity, and Current Quantity are required.');
+    if (!name.trim() || quantityPurchased === '') {
+      setFormError('Item Name and Quantity Purchased are required.');
       return;
     }
 
-    // Validate initialQuantity - if it's not an empty string (checked on L55), it must be a number.
-    // So, we only need to check if it's NaN.
-    if (isNaN(initialQuantity as number)) { // Cast to number as TS might not infer perfectly after L55
-        setFormError('Initial Quantity must be a valid number.');
+    if (isNaN(quantityPurchased as number) || Number(quantityPurchased) <= 0) {
+        setFormError('Quantity Purchased must be a positive number.');
+        return;
+    }
+    
+    if (totalPurchaseCost !== '' && (isNaN(totalPurchaseCost as number) || Number(totalPurchaseCost) < 0)) {
+        setFormError('Total Purchase Cost must be a valid non-negative number if provided.');
         return;
     }
 
-    // Validate currentQuantity - similar logic
-    if (isNaN(currentQuantity as number)) { // Cast to number
-        setFormError('Current Quantity must be a valid number.');
-        return;
-    }
-
-    // Validate costPerUnit (if provided)
-    if (costPerUnit !== '') { // Only validate if a value is entered
-        if (isNaN(costPerUnit as number)) { // Cast to number
-            setFormError('Cost per Unit must be a valid number if provided.');
-            return;
-        }
-    }
+    const numQuantityPurchased = Number(quantityPurchased);
 
     const inventoryData = {
       name: name.trim(),
       type: type.trim() || undefined,
       supplier: supplier.trim() || undefined,
       purchase_date: purchaseDate || undefined,
-      initial_quantity: Number(initialQuantity),
-      current_quantity: Number(currentQuantity),
+      initial_quantity: numQuantityPurchased,
+      current_quantity: initialData ? initialData.current_quantity : numQuantityPurchased, // For edit, preserve existing current_quantity; for new, set to initial
       quantity_unit: quantityUnit.trim() || undefined,
-      cost_per_unit: costPerUnit === '' ? undefined : Number(costPerUnit),
+      total_purchase_cost: totalPurchaseCost === '' ? undefined : Number(totalPurchaseCost),
       notes: notes.trim() || undefined,
     };
-
+    
     if (initialData?.id) {
-      await onSubmit({ ...initialData, ...inventoryData });
+      // When editing, we only update fields that are editable.
+      // initial_quantity and total_purchase_cost are generally set at creation.
+      // If these need to be editable, the form and logic would be more complex (e.g. "New Stock Entry" vs "Edit Item Details")
+      // For now, editing primarily affects name, type, supplier, unit, notes.
+      // Current quantity is updated by usage.
+      const { initial_quantity, current_quantity, total_purchase_cost, ...editableFields } = inventoryData;
+      const dataToSubmit = {
+        ...initialData,
+        ...editableFields,
+        // Ensure these are not accidentally changed if the form fields were different for edit
+        initial_quantity: initialData.initial_quantity,
+        current_quantity: initialData.current_quantity,
+        total_purchase_cost: initialData.total_purchase_cost
+      };
+      await onSubmit(dataToSubmit);
     } else {
-      await onSubmit(inventoryData);
+      const newId = crypto.randomUUID();
+      // For new items, current_quantity is same as initial_quantity
+      // And set qr_code_data to the newId
+      await onSubmit({
+        ...inventoryData,
+        current_quantity: numQuantityPurchased,
+        qr_code_data: newId
+      });
     }
   };
 
@@ -162,29 +174,31 @@ export default function InputInventoryForm({ initialData, onSubmit, onCancel, is
               </label>
               <input
                 type="number"
-                id="initialQuantity"
-                value={initialQuantity}
-                onChange={(e) => setInitialQuantity(e.target.value === '' ? '' : parseFloat(e.target.value))}
+                id="quantityPurchased"
+                value={quantityPurchased}
+                onChange={(e) => setQuantityPurchased(e.target.value === '' ? '' : parseFloat(e.target.value))}
                 className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-green-500 focus:border-green-500 sm:text-sm"
                 required
-                disabled={isSubmitting}
+                disabled={isSubmitting || !!initialData} // Disable if editing existing item
                 step="any"
               />
             </div>
             <div>
-              <label htmlFor="currentQuantity" className="block text-sm font-medium text-gray-700">
-                Current Quantity <span className="text-red-500">*</span>
+              <label htmlFor="currentQuantityDisplay" className="block text-sm font-medium text-gray-700">
+                Current Quantity
               </label>
               <input
                 type="number"
-                id="currentQuantity"
-                value={currentQuantity}
-                onChange={(e) => setCurrentQuantity(e.target.value === '' ? '' : parseFloat(e.target.value))}
-                className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-green-500 focus:border-green-500 sm:text-sm"
-                required
-                disabled={isSubmitting}
+                id="currentQuantityDisplay"
+                value={currentQuantityDisplay}
+                className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm bg-gray-100 sm:text-sm"
+                readOnly // Make it strictly read-only
+                disabled
                 step="any"
               />
+               <p className="text-xs text-gray-500 mt-1">
+                {initialData ? "Updated via Cultivation Logs." : "Set automatically from Quantity Purchased."}
+               </p>
             </div>
           </div>
 
@@ -201,14 +215,14 @@ export default function InputInventoryForm({ initialData, onSubmit, onCancel, is
               />
             </div>
             <div>
-              <label htmlFor="costPerUnit" className="block text-sm font-medium text-gray-700">Cost per Unit</label>
+              <label htmlFor="totalPurchaseCost" className="block text-sm font-medium text-gray-700">Total Purchase Cost (€)</label>
               <input
                 type="number"
-                id="costPerUnit"
-                value={costPerUnit}
-                onChange={(e) => setCostPerUnit(e.target.value === '' ? '' : parseFloat(e.target.value))}
+                id="totalPurchaseCost"
+                value={totalPurchaseCost}
+                onChange={(e) => setTotalPurchaseCost(e.target.value === '' ? '' : parseFloat(e.target.value))}
                 className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-green-500 focus:border-green-500 sm:text-sm"
-                disabled={isSubmitting}
+                disabled={isSubmitting || !!initialData} // Disable if editing existing item
                 step="any"
               />
             </div>

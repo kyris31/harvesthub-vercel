@@ -2,6 +2,7 @@
 
 import React from 'react';
 import { InputInventory } from '@/lib/db';
+import { QRCodeCanvas } from 'qrcode.react';
 
 interface InputInventoryListProps {
   inventoryItems: InputInventory[];
@@ -27,23 +28,37 @@ export default function InputInventoryList({ inventoryItems, onEdit, onDelete, i
             <th className="text-left py-3 px-5 uppercase font-semibold text-sm">Supplier</th>
             <th className="text-right py-3 px-5 uppercase font-semibold text-sm">Current Qty</th>
             <th className="text-left py-3 px-5 uppercase font-semibold text-sm">Unit</th>
-            <th className="text-right py-3 px-5 uppercase font-semibold text-sm">Cost/Unit</th>
+            <th className="text-right py-3 px-5 uppercase font-semibold text-sm">Total Cost (€)</th>
+            <th className="text-right py-3 px-5 uppercase font-semibold text-sm">Cost/Unit (€)</th>
+            <th className="text-center py-3 px-5 uppercase font-semibold text-sm">QR Code</th>
             <th className="text-center py-3 px-5 uppercase font-semibold text-sm">Synced</th>
             <th className="text-center py-3 px-5 uppercase font-semibold text-sm">Actions</th>
           </tr>
         </thead>
         <tbody className="text-gray-700">
-          {activeItems.map((item) => (
-            <tr key={item.id} className="border-b border-gray-200 hover:bg-green-50 transition-colors duration-150">
-              <td className="py-3 px-5">{item.name}</td>
-              <td className="py-3 px-5">{item.type || <span className="text-gray-400">N/A</span>}</td>
-              <td className="py-3 px-5">{item.supplier || <span className="text-gray-400">N/A</span>}</td>
-              <td className="py-3 px-5 text-right">{item.current_quantity}</td>
-              <td className="py-3 px-5">{item.quantity_unit || <span className="text-gray-400">N/A</span>}</td>
-              <td className="py-3 px-5 text-right">{item.cost_per_unit !== undefined ? item.cost_per_unit.toFixed(2) : <span className="text-gray-400">N/A</span>}</td>
-              <td className="py-3 px-5 text-center">
-                {item._synced === 0 ? (
-                  <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800">
+          {activeItems.map((item) => {
+            const costPerUnit = (item.total_purchase_cost !== undefined && item.initial_quantity !== undefined && item.initial_quantity > 0)
+              ? (item.total_purchase_cost / item.initial_quantity)
+              : undefined;
+            return (
+              <tr key={item.id} className="border-b border-gray-200 hover:bg-green-50 transition-colors duration-150">
+                <td className="py-3 px-5">{item.name}</td>
+                <td className="py-3 px-5">{item.type || <span className="text-gray-400">N/A</span>}</td>
+                <td className="py-3 px-5">{item.supplier || <span className="text-gray-400">N/A</span>}</td>
+                <td className="py-3 px-5 text-right">{item.current_quantity ?? <span className="text-gray-400">N/A</span>}</td>
+                <td className="py-3 px-5">{item.quantity_unit || <span className="text-gray-400">N/A</span>}</td>
+                <td className="py-3 px-5 text-right">{item.total_purchase_cost !== undefined ? item.total_purchase_cost.toFixed(2) : <span className="text-gray-400">N/A</span>}</td>
+                <td className="py-3 px-5 text-right">{costPerUnit !== undefined ? costPerUnit.toFixed(2) : <span className="text-gray-400">N/A</span>}</td>
+                <td className="py-3 px-5 text-center">
+                  {item.qr_code_data ? (
+                    <QRCodeCanvas value={item.qr_code_data} size={40} level="M" includeMargin={false} />
+                  ) : (
+                    <span className="text-gray-400 text-xs">N/A</span>
+                  )}
+                </td>
+                <td className="py-3 px-5 text-center">
+                  {item._synced === 0 ? (
+                    <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800">
                     Pending
                   </span>
                 ) : item._synced === 1 ? (
@@ -73,7 +88,8 @@ export default function InputInventoryList({ inventoryItems, onEdit, onDelete, i
                 </button>
               </td>
             </tr>
-          ))}
+          );
+        })}
         </tbody>
       </table>
     </div>

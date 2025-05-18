@@ -1,48 +1,70 @@
 'use client';
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState } from 'react'; // Removed useEffect, useCallback
+import { useLiveQuery } from 'dexie-react-hooks';
 import { db, HarvestLog, PlantingLog, SeedBatch, Crop } from '@/lib/db';
 import HarvestLogList from '@/components/HarvestLogList';
 import HarvestLogForm from '@/components/HarvestLogForm';
+import { exportHarvestLogsToCSV, exportHarvestLogsToPDF } from '@/lib/reportUtils';
 
+// syncCounter prop is no longer needed with useLiveQuery
 export default function HarvestLogsPage() {
-  const [harvestLogs, setHarvestLogs] = useState<HarvestLog[]>([]);
-  const [plantingLogs, setPlantingLogs] = useState<PlantingLog[]>([]);
-  const [seedBatches, setSeedBatches] = useState<SeedBatch[]>([]);
-  const [crops, setCrops] = useState<Crop[]>([]);
-  
-  const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
   const [showForm, setShowForm] = useState(false);
   const [editingLog, setEditingLog] = useState<HarvestLog | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isDeleting, setIsDeleting] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null); // For form submission errors
 
-  const fetchData = useCallback(async () => {
-    setIsLoading(true);
-    try {
-      const [hLogsData, pLogsData, sBatchesData, crpsData] = await Promise.all([
-        db.harvestLogs.where('is_deleted').equals(0).orderBy('harvest_date').reverse().toArray(),
-        db.plantingLogs.where('is_deleted').equals(0).orderBy('planting_date').reverse().toArray(),
-        db.seedBatches.where('is_deleted').equals(0).orderBy('_last_modified').reverse().toArray(),
-        db.crops.where('is_deleted').equals(0).orderBy('name').toArray()
-      ]);
-      setHarvestLogs(hLogsData);
-      setPlantingLogs(pLogsData);
-      setSeedBatches(sBatchesData);
-      setCrops(crpsData);
-      setError(null);
-    } catch (err) {
-      console.error("Failed to fetch harvest data:", err);
-      setError("Failed to load harvest logs or related data. Please try again.");
-    } finally {
-      setIsLoading(false);
-    }
-  }, []);
+  const harvestLogs = useLiveQuery(
+    async () => {
+      try {
+        return await db.harvestLogs.orderBy('harvest_date').filter(hl => hl.is_deleted === 0).reverse().toArray();
+      } catch (err) {
+        console.error("Failed to fetch harvest logs with useLiveQuery:", err);
+        setError("Failed to load harvest logs. Please try again.");
+        return [];
+      }
+    },
+    []
+  );
 
-  useEffect(() => {
-    fetchData();
-  }, [fetchData]);
+  const plantingLogs = useLiveQuery(
+    async () => {
+      try {
+        return await db.plantingLogs.orderBy('planting_date').filter(pl => pl.is_deleted === 0).reverse().toArray();
+      } catch (err) {
+        console.error("Failed to fetch planting logs for HarvestLogsPage:", err);
+        return [];
+      }
+    },
+    []
+  );
+
+  const seedBatches = useLiveQuery(
+    async () => {
+      try {
+        return await db.seedBatches.orderBy('_last_modified').filter(sb => sb.is_deleted === 0).reverse().toArray();
+      } catch (err) {
+        console.error("Failed to fetch seed batches for HarvestLogsPage:", err);
+        return [];
+      }
+    },
+    []
+  );
+
+  const crops = useLiveQuery(
+    async () => {
+      try {
+        return await db.crops.orderBy('name').filter(c => c.is_deleted === 0).toArray();
+      } catch (err) {
+        console.error("Failed to fetch crops for HarvestLogsPage:", err);
+        return [];
+      }
+    },
+    []
+  );
+
+  const isLoading = harvestLogs === undefined || plantingLogs === undefined || seedBatches === undefined || crops === undefined;
 
   const handleFormSubmit = async (data: Omit<HarvestLog, 'id' | '_synced' | '_last_modified' | 'created_at' | 'updated_at'> | HarvestLog) => {
     setIsSubmitting(true);
@@ -70,7 +92,7 @@ export default function HarvestLogsPage() {
         const id = crypto.randomUUID();
         await db.harvestLogs.add({ ...newLogData, id });
       }
-      await fetchData(); // Refresh list
+      // await fetchData(); // No longer needed
       setShowForm(false);
       setEditingLog(null);
     } catch (err: any) {
@@ -95,7 +117,7 @@ export default function HarvestLogsPage() {
         await db.markForSync(db.harvestLogs, id, true);
         // Deleting a harvest log could affect sales if items from this harvest were sold.
         // The sales form/list should gracefully handle missing harvest logs.
-        await fetchData(); // Refresh list
+        // await fetchData(); // No longer needed
       } catch (err) {
         console.error("Failed to delete harvest log:", err);
         setError("Failed to delete harvest log.");
@@ -108,14 +130,30 @@ export default function HarvestLogsPage() {
   return (
     <div>
       <header className="bg-white shadow mb-6">
-        <div className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8 flex justify-between items-center">
-          <h1 className="text-3xl font-bold tracking-tight text-gray-900">Harvest Logs</h1>
-          <button
-            onClick={() => { setEditingLog(null); setShowForm(true); setError(null); }}
-            className="bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-4 rounded shadow-sm transition-colors duration-150"
-          >
-            Record New Harvest
-          </button>
+        <div className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
+          <div className="flex flex-wrap justify-between items-center gap-4">
+            <h1 className="text-3xl font-bold tracking-tight text-gray-900">Harvest Logs</h1>
+            <div className="flex space-x-3">
+              <button
+                onClick={() => exportHarvestLogsToCSV()} // Pass empty/null filters if no UI for them here
+                className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded shadow-sm transition-colors duration-150 text-sm"
+              >
+                Export Harvest Logs (CSV)
+              </button>
+              <button
+                onClick={() => exportHarvestLogsToPDF()} // Pass empty/null filters if no UI for them here
+                className="bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-4 rounded shadow-sm transition-colors duration-150 text-sm"
+              >
+                Export Harvest Logs (PDF)
+              </button>
+              <button
+                onClick={() => { setEditingLog(null); setShowForm(true); setError(null); }}
+                className="bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-4 rounded shadow-sm transition-colors duration-150 text-sm"
+              >
+                Record New Harvest
+              </button>
+            </div>
+          </div>
         </div>
       </header>
 
@@ -131,7 +169,7 @@ export default function HarvestLogsPage() {
       <div className="mt-4">
         {error && <p className="text-red-500 mb-4 p-3 bg-red-100 rounded-md">{error}</p>}
         {isLoading && <p className="text-center text-gray-500">Loading harvest logs...</p>}
-        {!isLoading && !error && (
+        {!isLoading && !error && harvestLogs && plantingLogs && seedBatches && crops && (
           <HarvestLogList
             harvestLogs={harvestLogs}
             plantingLogs={plantingLogs}
@@ -142,7 +180,7 @@ export default function HarvestLogsPage() {
             isDeleting={isDeleting}
           />
         )}
-        {!isLoading && harvestLogs.length === 0 && !error && (
+        {!isLoading && harvestLogs && harvestLogs.length === 0 && !error && (
            <div className="text-center py-10">
             <svg className="mx-auto h-12 w-12 text-gray-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="currentColor" aria-hidden="true">
               <path strokeLinecap="round" strokeLinejoin="round" d="M20.25 7.5l-.625 10.632a2.25 2.25 0 01-2.247 2.118H6.622a2.25 2.25 0 01-2.247-2.118L3.75 7.5M10 11.25h4M3.375 7.5h17.25c.621 0 1.125-.504 1.125-1.125V6.375c0-.621-.504-1.125-1.125-1.125H3.375c-.621 0-1.125.504-1.125 1.125v.001c0 .621.504 1.125 1.125 1.125z" />

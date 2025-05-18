@@ -12,6 +12,7 @@ interface CustomerFormProps {
 
 export default function CustomerForm({ initialData, onSubmit, onCancel, isSubmitting }: CustomerFormProps) {
   const [name, setName] = useState('');
+  const [customerType, setCustomerType] = useState<'Individual' | 'Commercial'>('Individual');
   const [contactInfo, setContactInfo] = useState('');
   const [address, setAddress] = useState('');
   const [formError, setFormError] = useState<string | null>(null);
@@ -19,10 +20,12 @@ export default function CustomerForm({ initialData, onSubmit, onCancel, isSubmit
   useEffect(() => {
     if (initialData) {
       setName(initialData.name);
+      setCustomerType(initialData.customer_type || 'Individual');
       setContactInfo(initialData.contact_info || '');
       setAddress(initialData.address || '');
     } else {
       setName('');
+      setCustomerType('Individual');
       setContactInfo('');
       setAddress('');
     }
@@ -38,6 +41,7 @@ export default function CustomerForm({ initialData, onSubmit, onCancel, isSubmit
 
     const customerData = {
       name: name.trim(),
+      customer_type: customerType,
       contact_info: contactInfo.trim() || undefined,
       address: address.trim() || undefined,
     };
@@ -67,6 +71,23 @@ export default function CustomerForm({ initialData, onSubmit, onCancel, isSubmit
             required
             disabled={isSubmitting}
           />
+        </div>
+
+        <div>
+          <label htmlFor="customerType" className="block text-sm font-medium text-gray-700">
+            Customer Type <span className="text-red-500">*</span>
+          </label>
+          <select
+            id="customerType"
+            value={customerType}
+            onChange={(e) => setCustomerType(e.target.value as 'Individual' | 'Commercial')}
+            className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-green-500 focus:border-green-500 sm:text-sm"
+            required
+            disabled={isSubmitting}
+          >
+            <option value="Individual">Individual</option>
+            <option value="Commercial">Commercial</option>
+          </select>
         </div>
 
         <div>

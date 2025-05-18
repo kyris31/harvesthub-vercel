@@ -20,7 +20,15 @@ export default function SaleForm({ initialData, onSubmit, onCancel, isSubmitting
   const [saleDate, setSaleDate] = useState('');
   const [customerId, setCustomerId] = useState<string | undefined>(undefined);
   const [notes, setNotes] = useState('');
-  const [items, setItems] = useState<(Partial<SaleItem & { key: string, availableQuantity?: number, cropName?: string }>)[]>([]);
+  // Extend SaleItem in state to include discount_type and discount_value for the form
+  const [items, setItems] = useState<(Partial<SaleItem & {
+    key: string,
+    availableQuantity?: number,
+    cropName?: string,
+    // Form-specific discount fields, SaleItem interface already has discount_type and discount_value
+    // We can use them directly if SaleItem is properly typed in the state.
+    // Let's ensure the SaleItem type itself is used for these.
+  }>)[]>([]);
   
   const [availableCustomers, setAvailableCustomers] = useState<Customer[]>([]);
   const [availableHarvests, setAvailableHarvests] = useState<EnrichedHarvestLog[]>([]);
@@ -31,11 +39,11 @@ export default function SaleForm({ initialData, onSubmit, onCancel, isSubmitting
   const fetchFormData = useCallback(async () => {
     try {
       const [customers, harvests, plantingLogs, seedBatches, crops] = await Promise.all([
-        db.customers.orderBy('name').toArray(),
-        db.harvestLogs.orderBy('harvest_date').reverse().toArray(),
-        db.plantingLogs.toArray(),
-        db.seedBatches.toArray(),
-        db.crops.toArray(),
+        db.customers.orderBy('name').filter(c => c.is_deleted !==1).toArray(),
+        db.harvestLogs.orderBy('harvest_date').filter(h => h.is_deleted !== 1).reverse().toArray(),
+        db.plantingLogs.filter(p => p.is_deleted !== 1).toArray(), // No specific order, ensure filtered
+        db.seedBatches.filter(sb => sb.is_deleted !== 1).toArray(), // Ensure filtered
+        db.crops.filter(c => c.is_deleted !== 1).toArray(), // Ensure filtered
       ]);
       setAvailableCustomers(customers);
       
@@ -49,7 +57,7 @@ export default function SaleForm({ initialData, onSubmit, onCancel, isSubmitting
             cropName = crop?.name || 'Unknown Crop';
           }
         } else if (pLog) {
-            // Fallback if no seed batch linked, try to find crop via planting log if direct crop link existed
+            // Fallback if no seed batch linked
         }
         return { ...h, cropName, plantingDate: pLog?.planting_date };
       });
@@ -67,51 +75,74 @@ export default function SaleForm({ initialData, onSubmit, onCancel, isSubmitting
       setSaleDate(initialData.sale_date ? initialData.sale_date.split('T')[0] : new Date().toISOString().split('T')[0]);
       setCustomerId(initialData.customer_id || undefined);
       setNotes(initialData.notes || '');
-      // TODO: Populate items from initialData.items if editing
-      // This requires fetching full harvest details for each item to pre-fill.
-      // For simplicity in this pass, editing will clear items. A real app would pre-load.
       if (initialData.items) {
          const initialItems = initialData.items.map((item, index) => {
-            const harvest = availableHarvests.find(h => h.id === item.harvest_log_id);
+            // Ensure availableHarvests is populated before trying to find
+            const harvest = availableHarvests.length > 0 ? availableHarvests.find(h => h.id === item.harvest_log_id) : undefined;
             return {
                 ...item,
                 key: `item-${index}-${Date.now()}`,
-                availableQuantity: harvest?.quantity_harvested, // This might be stale if other sales used it
-                cropName: harvest?.cropName
+                availableQuantity: harvest?.quantity_harvested,
+                cropName: harvest?.cropName,
+                quantity_sold: item.quantity_sold,
+                price_per_unit: item.price_per_unit,
+                discount_type: item.discount_type || null, // Initialize from data
+                discount_value: item.discount_value || null // Initialize from data
             };
         });
-        // setItems(initialItems); // Deferred for simplicity
+        setItems(initialItems);
       } else {
-        setItems([{ key: `item-0-${Date.now()}`, harvest_log_id: '', quantity_sold: '', price_per_unit: '' }]);
+        setItems([{ key: `item-0-${Date.now()}`, harvest_log_id: '', quantity_sold: 0, price_per_unit: 0, discount_type: null, discount_value: null, notes: '' }]);
       }
-
     } else {
       setSaleDate(new Date().toISOString().split('T')[0]);
-      setItems([{ key: `item-0-${Date.now()}`, harvest_log_id: '', quantity_sold: '', price_per_unit: '' }]);
+      setItems([{ key: `item-0-${Date.now()}`, harvest_log_id: '', quantity_sold: 0, price_per_unit: 0, discount_type: null, discount_value: null, notes: '' }]);
     }
-  }, [initialData, fetchFormData, availableHarvests]); // availableHarvests in dep array for initial items
+  }, [initialData, fetchFormData]);
 
-  const handleItemChange = (index: number, field: keyof SaleItem, value: any) => {
-    const newItems = [...items];
-    const currentItem = { ...newItems[index], [field]: value };
+  const handleItemChange = (index: number, field: keyof SaleItem | 'quantity_sold_str' | 'price_per_unit_str' | 'discount_value_str', value: any) => {
+    const newItemsState = [...items];
+    let currentItem = { ...newItemsState[index] } as Partial<SaleItem & { key: string, availableQuantity?: number, cropName?: string }>;
 
+    if (field === 'quantity_sold_str') {
+        currentItem.quantity_sold = value === '' ? undefined : parseFloat(value);
+    } else if (field === 'price_per_unit_str') {
+        currentItem.price_per_unit = value === '' ? undefined : parseFloat(value);
+    } else if (field === 'discount_value_str') {
+        currentItem.discount_value = value === '' ? null : parseFloat(value);
+    } else if (field === 'discount_type') {
+        currentItem.discount_type = value === '' ? null : value;
+        // If switching type, might want to clear discount_value or validate
+        if (value === null || value === '') currentItem.discount_value = null;
+    }
+     else {
+        (currentItem as any)[field] = value;
+    }
+    
     if (field === 'harvest_log_id' && value) {
         const selectedHarvest = availableHarvests.find(h => h.id === value);
         currentItem.availableQuantity = selectedHarvest?.quantity_harvested;
         currentItem.cropName = selectedHarvest?.cropName;
-        // Optionally auto-fill price if you have a standard price for crops
     }
-    newItems[index] = currentItem;
-    setItems(newItems);
+    newItemsState[index] = currentItem;
+    setItems(newItemsState);
   };
 
   const addItem = () => {
-    setItems([...items, { key: `item-${items.length}-${Date.now()}`, harvest_log_id: '', quantity_sold: '', price_per_unit: '' }]);
+    setItems([...items, {
+        key: `item-${items.length}-${Date.now()}`,
+        harvest_log_id: '',
+        quantity_sold: 0,
+        price_per_unit: 0,
+        discount_type: null,
+        discount_value: null,
+        notes: ''
+    }]);
   };
 
   const removeItem = (index: number) => {
-    const newItems = items.filter((_, i) => i !== index);
-    setItems(newItems);
+    const newItemsState = items.filter((_, i) => i !== index);
+    setItems(newItemsState);
   };
 
   const handleCustomerSubmit = async (customerData: Omit<Customer, 'id' | '_synced' | '_last_modified' | 'created_at' | 'updated_at'> | Customer) => {
@@ -119,16 +150,17 @@ export default function SaleForm({ initialData, onSubmit, onCancel, isSubmitting
       const now = new Date().toISOString();
       const id = crypto.randomUUID();
       const newCustomer : Customer = {
-        ...(customerData as Omit<Customer, 'id' | '_synced' | '_last_modified' | 'created_at' | 'updated_at'>),
+        ...(customerData as Omit<Customer, 'id' | '_synced' | '_last_modified' | 'created_at' | 'updated_at' | 'is_deleted' | 'deleted_at'>),
         id,
         created_at: now,
         updated_at: now,
         _synced: 0,
-        _last_modified: Date.now()
+        _last_modified: Date.now(),
+        is_deleted: 0,
       };
       await db.customers.add(newCustomer);
-      await fetchFormData(); // Refresh customer list
-      setCustomerId(id); // Auto-select new customer
+      await fetchFormData(); 
+      setCustomerId(id); 
       setShowCustomerForm(false);
       return id;
     } catch (err) {
@@ -150,25 +182,37 @@ export default function SaleForm({ initialData, onSubmit, onCancel, isSubmitting
     }
 
     const saleItemsData: Omit<SaleItem, 'id' | 'sale_id' | '_synced' | '_last_modified' | 'created_at' | 'updated_at'>[] = [];
-    for (const item of items) {
-      if (!item.harvest_log_id || !item.quantity_sold || !item.price_per_unit) {
-        setFormError('All item fields (Product, Quantity, Price) are required.');
+    for (const [index, item] of items.entries()) { // Use .entries() to get index
+      if (!item.harvest_log_id || item.quantity_sold === undefined || item.price_per_unit === undefined || Number(item.quantity_sold) <= 0 || Number(item.price_per_unit) < 0) { // Allow 0 price, but not negative
+        setFormError(`Item ${index + 1}: Product, valid Quantity (>0), and Price (>=0) are required.`);
         return;
       }
       if (isNaN(Number(item.quantity_sold)) || isNaN(Number(item.price_per_unit))) {
-        setFormError('Item quantity and price must be numbers.');
+        setFormError(`Item ${index + 1}: Quantity and Price must be numbers.`);
         return;
       }
-      // TODO: Check against available quantity from harvest log (needs careful handling for concurrent sales or edits)
-      // const harvest = availableHarvests.find(h => h.id === item.harvest_log_id);
-      // if (harvest && Number(item.quantity_sold) > harvest.quantity_harvested) {
-      //   setFormError(`Not enough stock for ${harvest.cropName} from batch harvested on ${new Date(harvest.harvest_date).toLocaleDateString()}. Available: ${harvest.quantity_harvested}`);
-      //   return;
-      // }
+      // Validate discount value based on type
+      if (item.discount_type) {
+        if (item.discount_value === undefined || item.discount_value === null || isNaN(Number(item.discount_value)) || Number(item.discount_value) < 0) {
+          setFormError(`Item ${index + 1}: Discount Value must be a non-negative number if Discount Type is selected.`);
+          return;
+        }
+        if (item.discount_type === 'Percentage' && Number(item.discount_value) > 100) {
+          setFormError(`Item ${index + 1}: Percentage discount cannot exceed 100.`);
+          return;
+        }
+      } else if (item.discount_value !== undefined && item.discount_value !== null && Number(item.discount_value) !== 0) { // Allow 0 discount value if type is null
+         setFormError(`Item ${index + 1}: Discount Value should only be set if Discount Type is selected (or set to 0 if no discount).`);
+         return;
+      }
+
+
       saleItemsData.push({
         harvest_log_id: item.harvest_log_id,
         quantity_sold: Number(item.quantity_sold),
         price_per_unit: Number(item.price_per_unit),
+        discount_type: item.discount_type || null,
+        discount_value: (item.discount_type && item.discount_value !== null && item.discount_value !== undefined) ? Number(item.discount_value) : null,
         notes: item.notes,
       });
     }
@@ -182,12 +226,25 @@ export default function SaleForm({ initialData, onSubmit, onCancel, isSubmitting
     await onSubmit(saleData, saleItemsData);
   };
   
-  const calculateTotal = () => {
-    return items.reduce((sum, item) => {
-        const quantity = Number(item.quantity_sold);
-        const price = Number(item.price_per_unit);
-        return sum + (isNaN(quantity) || isNaN(price) ? 0 : quantity * price);
-    }, 0);
+  const calculateItemTotal = (item: Partial<SaleItem>): number => {
+    const quantity = Number(item.quantity_sold);
+    const price = Number(item.price_per_unit);
+    if (isNaN(quantity) || isNaN(price)) return 0;
+
+    let itemTotal = quantity * price;
+    if (item.discount_type && (item.discount_value !== null && item.discount_value !== undefined)) {
+        const discountValue = Number(item.discount_value);
+        if (item.discount_type === 'Amount') {
+            itemTotal -= discountValue;
+        } else if (item.discount_type === 'Percentage') {
+            itemTotal -= itemTotal * (discountValue / 100);
+        }
+    }
+    return Math.max(0, itemTotal); // Ensure total doesn't go below zero
+  };
+
+  const calculateOverallTotal = () => {
+    return items.reduce((sum, item) => sum + calculateItemTotal(item), 0);
   };
 
   return (
@@ -202,7 +259,7 @@ export default function SaleForm({ initialData, onSubmit, onCancel, isSubmitting
             <CustomerForm 
               onSubmit={handleCustomerSubmit}
               onCancel={() => setShowCustomerForm(false)}
-              isSubmitting={false} /* Independent submission state for this sub-form */
+              isSubmitting={false} 
             />
           </div>
         )}
@@ -236,12 +293,19 @@ export default function SaleForm({ initialData, onSubmit, onCancel, isSubmitting
                   disabled={isSubmitting}
                 >
                   <option value="">Select a Customer</option>
-                  {availableCustomers.map(cust => (
-                    <option key={cust.id} value={cust.id}>{cust.name}</option>
-                  ))}
+                  <optgroup label="Individual Customers">
+                    {availableCustomers.filter(c => c.customer_type === 'Individual' || !c.customer_type).map(cust => (
+                      <option key={cust.id} value={cust.id}>{cust.name}</option>
+                    ))}
+                  </optgroup>
+                  <optgroup label="Commercial Customers">
+                    {availableCustomers.filter(c => c.customer_type === 'Commercial').map(cust => (
+                      <option key={cust.id} value={cust.id}>{cust.name}</option>
+                    ))}
+                  </optgroup>
                 </select>
-                <button 
-                  type="button" 
+                <button
+                  type="button"
                   onClick={() => setShowCustomerForm(true)}
                   className="mt-1 px-3 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700 focus:outline-none"
                   title="Add New Customer"
@@ -289,30 +353,89 @@ export default function SaleForm({ initialData, onSubmit, onCancel, isSubmitting
                   <div>
                     <label htmlFor={`itemQty-${index}`} className="block text-xs font-medium text-gray-700">Quantity <span className="text-red-500">*</span></label>
                     <input
-                      type="number"
+                      type="text" 
                       id={`itemQty-${index}`}
-                      value={item.quantity_sold || ''}
-                      onChange={(e) => handleItemChange(index, 'quantity_sold', e.target.value === '' ? '' : parseFloat(e.target.value))}
+                      value={item.quantity_sold === undefined ? '' : String(item.quantity_sold)}
+                      onChange={(e) => handleItemChange(index, 'quantity_sold_str', e.target.value)}
                       className="mt-1 block w-full px-2 py-1.5 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-green-500 focus:border-green-500 sm:text-xs"
                       required
                       disabled={isSubmitting}
-                      step="any"
+                      placeholder="0"
                     />
                   </div>
                   <div>
                     <label htmlFor={`itemPrice-${index}`} className="block text-xs font-medium text-gray-700">Price/Unit <span className="text-red-500">*</span></label>
                     <input
-                      type="number"
+                      type="text" 
                       id={`itemPrice-${index}`}
-                      value={item.price_per_unit || ''}
-                      onChange={(e) => handleItemChange(index, 'price_per_unit', e.target.value === '' ? '' : parseFloat(e.target.value))}
+                      value={item.price_per_unit === undefined ? '' : String(item.price_per_unit)}
+                      onChange={(e) => handleItemChange(index, 'price_per_unit_str', e.target.value)}
                       className="mt-1 block w-full px-2 py-1.5 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-green-500 focus:border-green-500 sm:text-xs"
                       required
                       disabled={isSubmitting}
-                      step="0.01"
+                      placeholder="0.00"
                     />
                   </div>
-                   <div className="md:col-span-1">
+                  {/* Discount fields will go here, making the grid more complex or needing a new row */}
+                </div>
+                {/* New row for discount and item notes */}
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mt-2">
+                    <div>
+                        <label className="block text-xs font-medium text-gray-700">Discount Type</label>
+                        <div className="mt-1 flex space-x-4">
+                            <label className="inline-flex items-center">
+                                <input
+                                    type="radio"
+                                    name={`discountType-${item.key}`}
+                                    value="Amount"
+                                    checked={item.discount_type === 'Amount'}
+                                    onChange={(e) => handleItemChange(index, 'discount_type', e.target.value)}
+                                    className="form-radio h-4 w-4 text-green-600"
+                                    disabled={isSubmitting}
+                                />
+                                <span className="ml-2 text-xs text-gray-700">€ Amount</span>
+                            </label>
+                            <label className="inline-flex items-center">
+                                <input
+                                    type="radio"
+                                    name={`discountType-${item.key}`}
+                                    value="Percentage"
+                                    checked={item.discount_type === 'Percentage'}
+                                    onChange={(e) => handleItemChange(index, 'discount_type', e.target.value)}
+                                    className="form-radio h-4 w-4 text-green-600"
+                                    disabled={isSubmitting}
+                                />
+                                <span className="ml-2 text-xs text-gray-700">% Percentage</span>
+                            </label>
+                             <label className="inline-flex items-center">
+                                <input
+                                    type="radio"
+                                    name={`discountType-${item.key}`}
+                                    value="" // Represents null or no discount
+                                    checked={!item.discount_type}
+                                    onChange={(e) => handleItemChange(index, 'discount_type', '')}
+                                    className="form-radio h-4 w-4 text-gray-400"
+                                    disabled={isSubmitting}
+                                />
+                                <span className="ml-2 text-xs text-gray-500">None</span>
+                            </label>
+                        </div>
+                    </div>
+                    <div className="md:col-span-1">
+                        <label htmlFor={`itemDiscountValue-${index}`} className="block text-xs font-medium text-gray-700">
+                            Discount Value ({item.discount_type === 'Percentage' ? '%' : '€'})
+                        </label>
+                        <input
+                            type="text"
+                            id={`itemDiscountValue-${index}`}
+                            value={item.discount_value === null || item.discount_value === undefined ? '' : String(item.discount_value)}
+                            onChange={(e) => handleItemChange(index, 'discount_value_str', e.target.value)}
+                            className="mt-1 block w-full px-2 py-1.5 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-green-500 focus:border-green-500 sm:text-xs"
+                            disabled={isSubmitting || !item.discount_type}
+                            placeholder="0"
+                        />
+                    </div>
+                     <div className="md:col-span-1">
                         <label htmlFor={`itemNotes-${index}`} className="block text-xs font-medium text-gray-700">Item Notes</label>
                         <input
                             type="text"
@@ -324,10 +447,11 @@ export default function SaleForm({ initialData, onSubmit, onCancel, isSubmitting
                         />
                     </div>
                 </div>
+                 <p className="text-xs text-right font-medium text-gray-700 mt-1">Item Subtotal: €{calculateItemTotal(item).toFixed(2)}</p>
               </div>
             ))}
-            <button 
-              type="button" 
+            <button
+              type="button"
               onClick={addItem}
               className="mt-2 px-3 py-1.5 border border-dashed border-green-400 text-sm font-medium rounded-md text-green-700 hover:bg-green-50 focus:outline-none"
               disabled={isSubmitting}
@@ -350,7 +474,7 @@ export default function SaleForm({ initialData, onSubmit, onCancel, isSubmitting
 
           <div className="flex items-center justify-between pt-4 border-t">
             <h3 className="text-xl font-semibold text-gray-800">
-                Total: ${calculateTotal().toFixed(2)}
+                Overall Total: €{calculateOverallTotal().toFixed(2)}
             </h3>
             <div className="flex items-center space-x-3">
                 <button

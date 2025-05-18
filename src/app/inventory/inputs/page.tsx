@@ -18,8 +18,8 @@ export default function InputInventoryPage() {
     setIsLoading(true);
     try {
       const items = await db.inputInventory
-        .where('is_deleted').equals(0)
         .orderBy('_last_modified')
+        .filter(item => item.is_deleted === 0)
         .reverse()
         .toArray();
       setInventoryItems(items);

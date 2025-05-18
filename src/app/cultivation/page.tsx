@@ -23,11 +23,11 @@ export default function CultivationLogsPage() {
     setIsLoading(true);
     try {
       const [cLogsData, pLogsData, sBatchesData, crpsData, inputsData] = await Promise.all([
-        db.cultivationLogs.where('is_deleted').equals(0).orderBy('activity_date').reverse().toArray(),
-        db.plantingLogs.where('is_deleted').equals(0).orderBy('planting_date').reverse().toArray(),
-        db.seedBatches.where('is_deleted').equals(0).orderBy('_last_modified').reverse().toArray(),
-        db.crops.where('is_deleted').equals(0).orderBy('name').toArray(),
-        db.inputInventory.where('is_deleted').equals(0).orderBy('name').toArray()
+        db.cultivationLogs.orderBy('activity_date').filter(cl => cl.is_deleted === 0).reverse().toArray(),
+        db.plantingLogs.orderBy('planting_date').filter(pl => pl.is_deleted === 0).reverse().toArray(),
+        db.seedBatches.orderBy('_last_modified').filter(sb => sb.is_deleted === 0).reverse().toArray(),
+        db.crops.orderBy('name').filter(c => c.is_deleted === 0).toArray(),
+        db.inputInventory.orderBy('name').filter(ii => ii.is_deleted === 0).toArray()
       ]);
       setCultivationLogs(cLogsData);
       setPlantingLogs(pLogsData);
@@ -50,73 +50,68 @@ export default function CultivationLogsPage() {
   const handleFormSubmit = async (data: Omit<CultivationLog, 'id' | '_synced' | '_last_modified' | 'created_at' | 'updated_at'> | CultivationLog) => {
     setIsSubmitting(true);
     setError(null);
+    const now = new Date().toISOString();
+    const logId = ('id' in data && data.id) ? data.id : crypto.randomUUID();
+
     try {
-      const now = new Date().toISOString();
-      let affectedInputItem: InputInventory | undefined = undefined;
-      let originalQuantity: number | undefined = undefined;
+      await db.transaction('rw', db.cultivationLogs, db.inputInventory, async () => {
+        let previousInputId: string | undefined = undefined;
+        let previousInputQtyUsed: number | undefined = undefined;
 
-      if (data.input_inventory_id && data.input_quantity_used) {
-        affectedInputItem = await db.inputInventory.get(data.input_inventory_id);
-        if (affectedInputItem) {
-          originalQuantity = affectedInputItem.current_quantity;
-        }
-      }
+        if ('id' in data && data.id) { // Editing existing log
+          const oldLog = await db.cultivationLogs.get(data.id);
+          if (oldLog && oldLog.input_inventory_id && oldLog.input_quantity_used) {
+            // Store old values to revert if input item changes or quantity changes
+            previousInputId = oldLog.input_inventory_id;
+            previousInputQtyUsed = oldLog.input_quantity_used;
+          }
 
-      if ('id' in data && data.id) { // Editing existing
-        // If input usage changed, revert old and apply new
-        const oldLog = cultivationLogs.find(log => log.id === data.id);
-        if (oldLog && oldLog.input_inventory_id && oldLog.input_quantity_used) {
-            const oldAffectedInput = await db.inputInventory.get(oldLog.input_inventory_id);
+          // If the input item or quantity used has changed, revert the old usage first
+          if (previousInputId && previousInputQtyUsed &&
+              (previousInputId !== data.input_inventory_id || previousInputQtyUsed !== data.input_quantity_used)) {
+            const oldAffectedInput = await db.inputInventory.get(previousInputId);
             if (oldAffectedInput) {
-                 await db.inputInventory.update(oldLog.input_inventory_id, { 
-                    current_quantity: (oldAffectedInput.current_quantity ?? 0) + oldLog.input_quantity_used,
-                    _synced: 0,
-                    _last_modified: Date.now()
-                });
+              await db.inputInventory.update(previousInputId, {
+                current_quantity: (oldAffectedInput.current_quantity ?? 0) + previousInputQtyUsed,
+                _synced: 0,
+                _last_modified: Date.now()
+              });
             }
+          }
+          
+          const updatedLog: Partial<CultivationLog> = { ...data, updated_at: now, _synced: 0, _last_modified: Date.now() };
+          await db.cultivationLogs.update(data.id, updatedLog);
+        } else { // Adding new log
+          const newLogData: CultivationLog = {
+            ...(data as Omit<CultivationLog, 'id' | '_synced' | '_last_modified' | 'created_at' | 'updated_at' | 'is_deleted' | 'deleted_at'>),
+            id: logId,
+            created_at: now,
+            updated_at: now,
+            _synced: 0,
+            _last_modified: Date.now(),
+            is_deleted: 0,
+            deleted_at: undefined,
+          };
+          await db.cultivationLogs.add(newLogData);
         }
-        
-        const updatedLog: Partial<CultivationLog> = {
-          ...data,
-          updated_at: now,
-          _synced: 0,
-          _last_modified: Date.now(),
-        };
-        await db.cultivationLogs.update(data.id, updatedLog);
-      } else { // Adding new
-        const newLogData: Omit<CultivationLog, 'id'> = {
-          ...(data as Omit<CultivationLog, 'id' | '_synced' | '_last_modified' | 'created_at' | 'updated_at' | 'is_deleted' | 'deleted_at'>),
-          created_at: now,
-          updated_at: now,
-          _synced: 0,
-          _last_modified: Date.now(),
-          is_deleted: 0,
-          deleted_at: undefined,
-        };
-        const id = crypto.randomUUID();
-        await db.cultivationLogs.add({ ...newLogData, id });
-      }
 
-      // Update inventory if an item was used
-      if (affectedInputItem && data.input_inventory_id && data.input_quantity_used) {
-        const newQuantity = (affectedInputItem.current_quantity ?? 0) - data.input_quantity_used;
-        if (newQuantity < 0) {
-            // Revert log addition/update if not enough stock, or handle as error
-            // For now, let's throw an error that will be caught
-            // This part needs careful transaction handling in a real scenario
-            if ('id' in data && data.id) { // Revert edit
-                 // This is complex, ideally use Dexie transactions. For now, just error out.
-            } else { // Revert add
-                // await db.cultivationLogs.delete(newLogData.id); // This ID is not available here easily
-            }
-            throw new Error(`Not enough stock for ${affectedInputItem.name}. Available: ${originalQuantity}, Tried to use: ${data.input_quantity_used}.`);
-        }
-        await db.inputInventory.update(data.input_inventory_id, { 
+        // Apply new input usage (for both add and relevant edits)
+        if (data.input_inventory_id && data.input_quantity_used && data.input_quantity_used > 0) {
+          const affectedInputItem = await db.inputInventory.get(data.input_inventory_id);
+          if (!affectedInputItem) {
+            throw new Error(`Input item with ID ${data.input_inventory_id} not found.`);
+          }
+          const newQuantity = (affectedInputItem.current_quantity ?? 0) - data.input_quantity_used;
+          if (newQuantity < 0) {
+            throw new Error(`Not enough stock for ${affectedInputItem.name}. Available: ${affectedInputItem.current_quantity ?? 0}, Tried to use: ${data.input_quantity_used}.`);
+          }
+          await db.inputInventory.update(data.input_inventory_id, {
             current_quantity: newQuantity,
             _synced: 0,
             _last_modified: Date.now()
-        });
-      }
+          });
+        }
+      }); // End transaction
 
       await fetchData();
       setShowForm(false);
@@ -140,20 +135,20 @@ export default function CultivationLogsPage() {
       setIsDeleting(id);
       setError(null);
       try {
-        const logToDelete = cultivationLogs.find(log => log.id === id);
-        if (logToDelete && logToDelete.input_inventory_id && logToDelete.input_quantity_used) {
-            const affectedInput = await db.inputInventory.get(logToDelete.input_inventory_id);
-            if (affectedInput) {
-                await db.inputInventory.update(logToDelete.input_inventory_id, {
-                    current_quantity: (affectedInput.current_quantity ?? 0) + logToDelete.input_quantity_used,
-                    _synced: 0,
-                    _last_modified: Date.now()
-                });
-            }
-        }
-        await db.markForSync(db.cultivationLogs, id, true);
-        // Note: Reverting inventory quantity upon soft delete is correct.
-        // The sync process will handle the actual deletion from Supabase.
+        await db.transaction('rw', db.cultivationLogs, db.inputInventory, async () => {
+          const logToDelete = await db.cultivationLogs.get(id);
+          if (logToDelete && logToDelete.input_inventory_id && logToDelete.input_quantity_used) {
+              const affectedInput = await db.inputInventory.get(logToDelete.input_inventory_id);
+              if (affectedInput) {
+                  await db.inputInventory.update(logToDelete.input_inventory_id, {
+                      current_quantity: (affectedInput.current_quantity ?? 0) + logToDelete.input_quantity_used,
+                      _synced: 0,
+                      _last_modified: Date.now()
+                  });
+              }
+          }
+          await db.markForSync(db.cultivationLogs, id, true);
+        });
         await fetchData();
       } catch (err) {
         console.error("Failed to delete cultivation log:", err);

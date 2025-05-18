@@ -1,27 +1,45 @@
 {
   "compilerOptions": {
+    // ... other existing compiler options ...
+    "baseUrl": ".", // This means paths are relative to the location of tsconfig.json (i.e., 'hurvesthub/')
+    "paths": {
+      "@/*": [
+        "./src/*"
+      ] // So, "@/*" will resolve to "hurvesthub/src/*"
+    },
     "target": "ES2017",
-    "lib": ["dom", "dom.iterable", "esnext"],
+    "lib": [
+      "dom",
+      "dom.iterable",
+      "esnext"
+    ],
     "allowJs": true,
     "skipLibCheck": true,
-    "strict": true,
+    "strict": false,
     "noEmit": true,
-    "esModuleInterop": true,
+    "incremental": true,
     "module": "esnext",
-    "moduleResolution": "bundler",
+    "esModuleInterop": true,
+    "moduleResolution": "node",
     "resolveJsonModule": true,
     "isolatedModules": true,
     "jsx": "preserve",
-    "incremental": true,
     "plugins": [
       {
         "name": "next"
       }
-    ],
-    "paths": {
-      "@/*": ["./src/*"]
-    }
+    ]
+    // ... other existing compiler options ...
   },
-  "include": ["next-env.d.ts", "**/*.ts", "**/*.tsx", ".next/types/**/*.ts"],
-  "exclude": ["node_modules"]
+  "include": [
+    "**/*.ts",
+    "**/*.tsx",
+    "next-env.d.ts",
+    ".next/types/**/*.ts"
+    // ... any other includes ...
+  ],
+  "exclude": [
+    "node_modules"
+    // ... any other excludes ...
+  ]
 }

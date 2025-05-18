@@ -12,6 +12,7 @@ export default function Layout({ children }: LayoutProps) {
   const isOnline = useOnlineStatus();
   const [syncing, setSyncing] = useState(false);
   const [lastSyncStatus, setLastSyncStatus] = useState<string | null>(null);
+  const [syncCounter, setSyncCounter] = useState(0); // New state to trigger re-fetches
 
   const handleManualSync = async () => {
     if (syncing) return;
@@ -19,7 +20,6 @@ export default function Layout({ children }: LayoutProps) {
     setLastSyncStatus("Syncing...");
     try {
       const result = await triggerManualSync();
-      // Check results for errors, provide more specific feedback
       const pushErrors = result.pushResult.errors?.length || 0;
       const fetchErrors = result.fetchResult.errors?.length || 0;
       if (pushErrors > 0 || fetchErrors > 0) {
@@ -33,8 +33,10 @@ export default function Layout({ children }: LayoutProps) {
       setLastSyncStatus("Sync failed. Check console.");
     } finally {
       setSyncing(false);
-      // Optionally clear status after a few seconds
-      // setTimeout(() => setLastSyncStatus(null), 5000);
+      setSyncCounter(prev => {
+        console.log('Layout: syncCounter incremented to:', prev + 1); // DEBUG
+        return prev + 1;
+      });
     }
   };
   
@@ -68,6 +70,7 @@ export default function Layout({ children }: LayoutProps) {
         onManualSync={handleManualSync}
       />
       <main className="flex-grow container mx-auto p-4 sm:p-6 lg:p-8">
+        {/* Render children directly. If pages need syncCounter, it should be provided via Context or passed differently. */}
         {children}
       </main>
       <footer className="bg-gray-100 text-center p-4 text-sm text-gray-600 border-t">

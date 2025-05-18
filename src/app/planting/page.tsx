@@ -1,51 +1,72 @@
 'use client';
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState } from 'react'; // Removed useEffect, useCallback
+import { useLiveQuery } from 'dexie-react-hooks';
 import { db, PlantingLog, SeedBatch, Crop } from '@/lib/db';
 import PlantingLogList from '@/components/PlantingLogList';
 import PlantingLogForm from '@/components/PlantingLogForm';
 
+// syncCounter prop is no longer needed with useLiveQuery
 export default function PlantingLogsPage() {
-  const [plantingLogs, setPlantingLogs] = useState<PlantingLog[]>([]);
-  const [seedBatches, setSeedBatches] = useState<SeedBatch[]>([]);
-  const [crops, setCrops] = useState<Crop[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
   const [showForm, setShowForm] = useState(false);
   const [editingLog, setEditingLog] = useState<PlantingLog | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isDeleting, setIsDeleting] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null); // For form submission errors
 
-  const fetchData = useCallback(async () => {
-    setIsLoading(true);
-    try {
-      const [logsData, sBatchesData, crpsData] = await Promise.all([
-        db.plantingLogs.where('is_deleted').equals(0).orderBy('planting_date').reverse().toArray(),
-        db.seedBatches.where('is_deleted').equals(0).orderBy('_last_modified').reverse().toArray(),
-        db.crops.where('is_deleted').equals(0).orderBy('name').toArray()
-      ]);
-      setPlantingLogs(logsData);
-      setSeedBatches(sBatchesData);
-      setCrops(crpsData);
-      setError(null);
-    } catch (err) {
-      console.error("Failed to fetch planting data:", err);
-      setError("Failed to load planting logs or related data. Please try again.");
-    } finally {
-      setIsLoading(false);
-    }
-  }, []);
+  const plantingLogs = useLiveQuery(
+    async () => {
+      try {
+        return await db.plantingLogs.orderBy('planting_date').filter(pl => pl.is_deleted === 0).reverse().toArray();
+      } catch (err) {
+        console.error("Failed to fetch planting logs with useLiveQuery:", err);
+        setError("Failed to load planting logs. Please try again.");
+        return [];
+      }
+    },
+    []
+  );
 
-  useEffect(() => {
-    fetchData();
-  }, [fetchData]);
+  const seedBatches = useLiveQuery(
+    async () => {
+      try {
+        return await db.seedBatches.orderBy('_last_modified').filter(sb => sb.is_deleted === 0).reverse().toArray();
+      } catch (err) {
+        console.error("Failed to fetch seed batches for PlantingLogsPage:", err);
+        // setError("Failed to load seed batch data."); // Avoid overwriting primary error
+        return [];
+      }
+    },
+    []
+  );
+
+  const crops = useLiveQuery(
+    async () => {
+      try {
+        return await db.crops.orderBy('name').filter(c => c.is_deleted === 0).toArray();
+      } catch (err) {
+        console.error("Failed to fetch crops for PlantingLogsPage:", err);
+        // setError("Failed to load crop data."); // Avoid overwriting primary error
+        return [];
+      }
+    },
+    []
+  );
+
+  const isLoading = plantingLogs === undefined || seedBatches === undefined || crops === undefined;
 
   const handleFormSubmit = async (data: Omit<PlantingLog, 'id' | '_synced' | '_last_modified' | 'created_at' | 'updated_at'> | PlantingLog) => {
     setIsSubmitting(true);
     setError(null);
     try {
       const now = new Date().toISOString();
+      let plantingLogId: string | undefined = undefined;
+
       if ('id' in data && data.id) { // Editing existing
+        // Note: Updating current_quantity for edited logs is complex.
+        // If the seed batch or quantity planted changes, we'd need to revert the old deduction
+        // and apply the new one. For simplicity, this example doesn't handle that rollback/reapply.
+        // This assumes that once a planting log is created, its impact on seed batch quantity is fixed.
         const updatedLog: Partial<PlantingLog> = {
           ...data,
           updated_at: now,
@@ -53,6 +74,7 @@ export default function PlantingLogsPage() {
           _last_modified: Date.now(),
         };
         await db.plantingLogs.update(data.id, updatedLog);
+        plantingLogId = data.id; // Keep track for potential (though not implemented here) quantity adjustments
       } else { // Adding new
         const newLogData: Omit<PlantingLog, 'id'> = {
           ...(data as Omit<PlantingLog, 'id' | '_synced' | '_last_modified' | 'created_at' | 'updated_at' | 'is_deleted' | 'deleted_at'>),
@@ -63,10 +85,23 @@ export default function PlantingLogsPage() {
           is_deleted: 0,
           deleted_at: undefined,
         };
-        const id = crypto.randomUUID();
-        await db.plantingLogs.add({ ...newLogData, id });
+        plantingLogId = crypto.randomUUID();
+        await db.plantingLogs.add({ ...newLogData, id: plantingLogId });
+
+        // Decrement seed batch quantity if a batch was used
+        if (data.seed_batch_id && data.quantity_planted && data.quantity_planted > 0) {
+          const batch = await db.seedBatches.get(data.seed_batch_id);
+          if (batch) {
+            const currentQty = batch.current_quantity ?? batch.initial_quantity ?? 0;
+            const newQuantity = Math.max(0, currentQty - data.quantity_planted);
+            await db.seedBatches.update(data.seed_batch_id, {
+              current_quantity: newQuantity,
+              _synced: 0, // Mark batch for sync as its quantity changed
+              _last_modified: Date.now()
+            });
+          }
+        }
       }
-      await fetchData();
       setShowForm(false);
       setEditingLog(null);
     } catch (err: any) {
@@ -91,7 +126,7 @@ export default function PlantingLogsPage() {
         await db.markForSync(db.plantingLogs, id, true);
         // Soft deleting a planting log might orphan cultivation/harvest logs.
         // The UI for those sections should handle displaying "Unknown Planting Log" or similar.
-        await fetchData();
+        // await fetchData(); // No longer needed
       } catch (err) {
         console.error("Failed to delete planting log:", err);
         setError("Failed to delete planting log.");
@@ -127,7 +162,7 @@ export default function PlantingLogsPage() {
       <div className="mt-4">
         {error && <p className="text-red-500 mb-4 p-3 bg-red-100 rounded-md">{error}</p>}
         {isLoading && <p className="text-center text-gray-500">Loading planting logs...</p>}
-        {!isLoading && !error && (
+        {!isLoading && !error && plantingLogs && seedBatches && crops && (
           <PlantingLogList
             plantingLogs={plantingLogs}
             seedBatches={seedBatches}
@@ -137,7 +172,7 @@ export default function PlantingLogsPage() {
             isDeleting={isDeleting}
           />
         )}
-        {!isLoading && plantingLogs.length === 0 && !error && (
+        {!isLoading && plantingLogs && plantingLogs.length === 0 && !error && (
            <div className="text-center py-10">
             <svg className="mx-auto h-12 w-12 text-gray-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth="1.5" stroke="currentColor" aria-hidden="true">
               <path strokeLinecap="round" strokeLinejoin="round" d="M9.53 16.122a3 3 0 00-5.78 1.128 2.25 2.25 0 01-2.4 2.245M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />

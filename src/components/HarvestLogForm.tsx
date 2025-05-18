@@ -18,35 +18,38 @@ export default function HarvestLogForm({ initialData, onSubmit, onCancel, isSubm
   const [qualityGrade, setQualityGrade] = useState('');
   const [notes, setNotes] = useState('');
   
-  const [availablePlantingLogs, setAvailablePlantingLogs] = useState<(PlantingLog & { cropName?: string; seedBatchCode?: string })[]>([]);
+  // Store enriched planting logs
+  const [availablePlantingLogs, setAvailablePlantingLogs] = useState<(PlantingLog & {
+    cropDetails?: Crop; // Full crop object
+    seedBatchDetails?: SeedBatch; // Full seed batch object
+  })[]>([]);
   const [formError, setFormError] = useState<string | null>(null);
 
   useEffect(() => {
     const fetchFormData = async () => {
       try {
-        const [pLogs, sBatches, crps] = await Promise.all([
-          db.plantingLogs.orderBy('planting_date').reverse().toArray(), // Show recent first
-          db.seedBatches.toArray(),
-          db.crops.toArray()
+        const [plantingLogsData, seedBatchesData, cropsData] = await Promise.all([
+          db.plantingLogs.orderBy('planting_date').filter(pl => pl.is_deleted !== 1).reverse().toArray(),
+          db.seedBatches.filter(sb => sb.is_deleted !== 1).toArray(),
+          db.crops.filter(c => c.is_deleted !== 1).toArray()
         ]);
 
-        const enrichedPlantingLogs = pLogs.map(pl => {
-          let cropName = 'N/A';
-          let seedBatchCode = 'N/A';
-          if (pl.seed_batch_id) {
-            const sBatch = sBatches.find(sb => sb.id === pl.seed_batch_id);
-            if (sBatch) {
-              seedBatchCode = sBatch.batch_code;
-              const crop = crps.find(c => c.id === sBatch.crop_id);
-              if (crop) cropName = crop.name;
-            }
-          }
-          return { ...pl, cropName, seedBatchCode };
+        const cropsMap = new Map(cropsData.map(crop => [crop.id, crop]));
+        const seedBatchesMap = new Map(seedBatchesData.map(batch => [batch.id, batch]));
+
+        const enrichedPlantingLogs = plantingLogsData.map(pl => {
+          const seedBatch = pl.seed_batch_id ? seedBatchesMap.get(pl.seed_batch_id) : undefined;
+          const crop = seedBatch ? cropsMap.get(seedBatch.crop_id) : undefined;
+          return {
+            ...pl,
+            cropDetails: crop,
+            seedBatchDetails: seedBatch
+          };
         });
         setAvailablePlantingLogs(enrichedPlantingLogs);
       } catch (error) {
         console.error("Failed to fetch form data for harvest logs", error);
-        setFormError("Could not load planting logs data.");
+        setFormError("Could not load planting logs or related data.");
       }
     };
     fetchFormData();
@@ -120,11 +123,38 @@ export default function HarvestLogForm({ initialData, onSubmit, onCancel, isSubm
               disabled={isSubmitting || availablePlantingLogs.length === 0}
             >
               <option value="">Select a Planting Log</option>
-              {availablePlantingLogs.map(pl => (
-                <option key={pl.id} value={pl.id}>
-                  {new Date(pl.planting_date).toLocaleDateString()} - {pl.cropName} (Batch: {pl.seedBatchCode}) - Loc: {pl.location_description || 'N/A'}
-                </option>
-              ))}
+              {availablePlantingLogs.map(pl => {
+                let label = `${new Date(pl.planting_date).toLocaleDateString()} - `;
+                const crop = pl.cropDetails;
+                
+                if (crop) {
+                  label += crop.name || 'Unnamed Crop';
+                  if (crop.variety) label += ` ${crop.variety}`;
+                  let details = [];
+                  if (crop.type) details.push(crop.type);
+                  if (crop.notes) details.push(crop.notes);
+                  if (details.length > 0) label += ` (${details.join(' - ')})`;
+                } else {
+                  // If cropDetails is missing, but we have seedBatchDetails, we might show batch code as a fallback.
+                  // However, the request is to remove batch code from the primary display.
+                  // If cropDetails is missing, it implies an issue with data integrity or fetching.
+                  // For now, if no crop, it will show "Unknown Crop" or "N/A Crop" as per current logic.
+                  // The original fallback `Unknown Crop (Batch: ${pl.seedBatchDetails.batch_code})` is removed.
+                  if (!crop && pl.seedBatchDetails) {
+                     label += `Unknown Crop (from Batch: ${pl.seedBatchDetails.batch_code})`; // Minimal batch info if crop is gone
+                  } else if (!crop) {
+                     label += 'N/A Crop';
+                  }
+                }
+                
+                label += ` - Loc: ${pl.plot_affected || pl.location_description || 'N/A'}`;
+                
+                return (
+                  <option key={pl.id} value={pl.id}>
+                    {label}
+                  </option>
+                );
+              })}
             </select>
             {availablePlantingLogs.length === 0 && <p className="text-xs text-gray-500 mt-1">No planting logs available. Please add one first.</p>}
           </div>
