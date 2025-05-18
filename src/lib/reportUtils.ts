@@ -2021,7 +2021,6 @@ export interface SeedSourceDeclarationReportItem {
   plantingDate: string;
   cropName?: string;
   cropVariety?: string;
-  seedBatchCode: string;
   seedSupplier?: string;
   seedPurchaseDate?: string;
   organicStatus?: string;
@@ -2066,7 +2065,6 @@ export async function getSeedSourceDeclarationData(filters?: DateRangeFilters): 
       plantingDate: new Date(pLog.planting_date).toLocaleDateString(),
       cropName: crop?.name,
       cropVariety: crop?.variety,
-      seedBatchCode: sBatch.batch_code,
       seedSupplier: sBatch.supplier,
       seedPurchaseDate: sBatch.purchase_date ? new Date(sBatch.purchase_date).toLocaleDateString() : undefined,
       organicStatus: sBatch.organic_status,
@@ -2100,17 +2098,16 @@ export async function exportSeedSourceDeclarationToPDF(filters?: DateRangeFilter
     
     const reportTitle = "Seed Source Declaration Report";
     const headers = [
-      "Planting Date", "Crop", "Variety", "Batch Code", "Supplier",
+      "Planting Date", "Crop", "Variety", "Supplier",
       "Purchase Date", "Organic Status", "Qty Sown", "Unit", "Plot/Location"
     ];
     // Adjust column widths as needed
-    const columnWidths = [60, 70, 60, 70, 70, 60, 70, 40, 35, 70];
+    const columnWidths = [60, 70, 60, 70, 60, 70, 40, 35, 70];
 
     const tableData = reportData.map(item => [
       item.plantingDate,
       item.cropName || '',
       item.cropVariety || '',
-      item.seedBatchCode,
       item.seedSupplier || '',
       item.seedPurchaseDate || '',
       item.organicStatus || '',
@@ -2135,7 +2132,7 @@ export async function exportSeedSourceDeclarationToPDF(filters?: DateRangeFilter
 function convertSeedSourceDeclarationToCSV(data: SeedSourceDeclarationReportItem[]): string {
   if (data.length === 0) return '';
   const headers = [
-    "Planting Date", "Crop Name", "Crop Variety", "Seed Batch Code", "Seed Supplier",
+    "Planting Date", "Crop Name", "Crop Variety", "Seed Supplier",
     "Seed Purchase Date", "Organic Status", "Quantity Sown", "Unit", "Plot/Location"
   ];
   const csvRows = [headers.join(',')];
@@ -2144,7 +2141,6 @@ function convertSeedSourceDeclarationToCSV(data: SeedSourceDeclarationReportItem
       `"${item.plantingDate}"`,
       `"${(item.cropName || '').replace(/"/g, '""')}"`,
       `"${(item.cropVariety || '').replace(/"/g, '""')}"`,
-      `"${item.seedBatchCode.replace(/"/g, '""')}"`,
       `"${(item.seedSupplier || '').replace(/"/g, '""')}"`,
       `"${item.seedPurchaseDate || ''}"`,
       `"${(item.organicStatus || '').replace(/"/g, '""')}"`,
