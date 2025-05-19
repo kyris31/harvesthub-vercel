@@ -1,0 +1,194 @@
+Product Requirements Document (PRD) – Hurvesthub
+Prepared by: K.K. Biofresh
+Date: 15/05/2025
+Product Version: v1.0 (Simplified Release)
+
+1. Overview
+Hurvesthub is a streamlined desktop web application built to manage and digitize key organic farming operations such as planting, inventory tracking, cultivation logs, harvesting, sales recording, and financial reporting. It is designed for single-user use by the farm owner and does not require authentication, real-time syncing, or mobile compatibility.
+
+2. Objectives & Goals
+Eliminate spreadsheets and manual logging
+
+Provide clear visibility into planting cycles, inventory, and finances
+
+Ensure traceability of seed batches, input usage, and harvests
+
+Generate printable and downloadable invoices and financial reports
+
+Support offline access with sync-on-reconnect
+
+Simplify system architecture for solo use
+
+3. Target Users & Personas
+👨‍🌾 Primary User Persona: Organic Farm Owner (Kiran)
+
+Owns and operates a mid-sized organic farm (5–10 acres)
+
+Needs a digital record-keeping system that replaces paper logs
+
+Requires accurate reporting for audits and decision-making
+
+Does not need multi-user access or real-time sync
+
+🎯 User Goals
+
+Record activity logs for planting, cultivation, and harvesting
+
+Track seed and input stock levels
+
+Log produce sales and auto-generate invoices
+
+View financial performance by planting cycle or date range
+
+Operate entirely from a desktop browser
+
+4. Key Features & Functional Requirements
+✅ Core Features (Simplified for Solo Desktop Use)
+
+Feature	Description
+Crop Management	Add/edit/delete crops and their types (e.g., tomato, carrot, spinach)
+Planting Logs	Record planting events and seed batch usage
+Inventory Management	Track and adjust quantities for seeds and organic inputs
+Cultivation Logging	Log weeding, watering, pest control with date and input usage
+Harvest Tracking	Record harvest events with quantity and link to planting log
+Sales Recording	Log product sales with item, quantity, price, and customer info
+Invoice Generator	Automatically generate PDF invoices from sales records
+Financial Dashboard	Visualize total sales, costs, and profits per cycle or date range
+Report Exporting	Export logs, inventory, and reports as PDF or CSV
+Offline Access	Use app offline with automatic sync when back online
+Tree Management	Add/edit/delete individual trees (e.g., olive, fruit trees) with details like species, variety, planting date, and location. Track individual tree performance or history.
+
+5. Feature Flow: Record Sale & Generate Invoice
+Open "Record Sale" screen
+
+Select harvested products and enter quantities
+
+Add customer name (optional) and contact info (optional)
+
+System calculates total price
+
+Click Submit – sale is saved
+
+Invoice is auto-generated (PDF) with:
+
+K.K. Biofresh branding
+
+Customer & sale details
+
+Product list with prices and totals
+
+Option to download or print invoice
+
+Note: Invoices are immutable once generated. No email or online distribution included.
+
+6. Data & Architecture Requirements
+🧩 Entities & Relationships
+Entity	Relationships / Description
+Crop	Type, Name (e.g., Tomato, Spinach)
+SeedBatch	Belongs to a Crop, tracked for planting usage
+PlantingLog	Uses a SeedBatch, records date planted
+CultivationLog	Links to a PlantingLog, includes activity type and inputs used
+InputInventory	Organic fertilizers/pesticides with quantities
+HarvestLog	Linked to PlantingLog, records quantity harvested
+Sale	Includes harvested items, quantity, price, and customer details
+Invoice	Auto-generated from Sale, stored as PDF, not editable
+FinancialReport	Aggregated view of revenue/cost by date or planting cycle
+Tree	Individual perennial plants (e.g., fruit trees, olive trees) with identifier, species, variety, planting date, location, and notes.
+
+7. UI/UX Design Principles
+🎨 Visual Style
+
+Nature-inspired colors: soft greens, warm browns, off-white background
+
+Clean and minimalist layout with grid structure
+
+Clear sans-serif fonts like Inter or Lato
+
+🧠 User Experience
+
+Desktop-first design
+
+Simple forms with auto-calculation and validations
+
+Context-aware tooltips and help labels
+
+Visual indicators for low inventory or missing data
+
+Export buttons for each log/report screen
+
+📌 Inspirations
+
+Notion: Clean modular layout
+
+Shopify Admin: Straightforward data entry forms
+
+QuickBooks: Simple, formal invoice generation
+
+8. Platform Requirements
+💻 Platform:
+
+Desktop Web Application (Chrome/Safari recommended)
+
+No mobile version planned for v1
+
+Works fully offline (with IndexedDB) and syncs data to Supabase when reconnected
+
+🛠️ Offline Sync
+
+Local-first functionality
+
+Visual sync status indicators (e.g., pending/unsynced badge)
+
+Manual sync button for control
+
+9. Non-Functional Requirements
+Category	Specification
+Authentication	❌ Not required (single-user use)
+Realtime	❌ Not used
+Security	Local device storage encryption + Supabase RLS for sync
+Privacy	No sharing of customer data, email, or phone number
+Performance	Sub-second load time on desktop browsers
+Availability	Offline-first; sync fallback; local-first mode is priority
+Invoice Editing	Invoices are read-only once created
+
+10. KPIs & Success Metrics
+Metric	Target Value
+Sales Entries per Month	100+
+Invoice Generation Accuracy	100%
+Inventory Update Frequency	Weekly
+Financial Report Downloads	≥ 5/month
+Data Sync Success Rate	> 98%
+Time to Record Activity	< 30 seconds
+
+11. Out-of-Scope & Constraints
+❌ No authentication or login system
+❌ No mobile or tablet compatibility
+❌ No real-time database features (e.g., subscriptions)
+❌ No payment processing or automated billing
+❌ No multi-user or team functionality
+❌ No external email features or automated sharing
+❌ Financial entries and invoices are immutable
+
+12. Future Roadmap
+✨ Nice-to-Haves
+
+QR code support for tagging seed/input items
+
+Reminder system for irrigation, pest control, harvests
+
+Organic compliance export tools
+
+🌱 Long-Term Vision
+
+B2B marketplace for organic produce
+
+Logistics and delivery integration
+
+Certification workflow and buyer verification tools
+
+13. Tech Stack Preferences
+Layer	Tool	Reason
+Frontend	Next.js (TypeScript, React)	Desktop performance & simplicity
+Database	Supabase (PostgreSQL)	Flexible and pre-integrated
+Sync/Offline	IndexedDB + Supabase sync	Robust offline-first strategy
+Hosting	Google Cloud	Familiar and preferred by owner
